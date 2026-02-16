@@ -194,4 +194,54 @@ export function trackEvent(eventName: string, params: Record<string, any> = {}) 
   }
 }
 
+/**
+ * Set player display name
+ */
+export async function setPlayerName(name: string): Promise<string> {
+  const sessionId = getSessionId();
+  const response = await fetch(`${API_BASE}/api/player`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, name }),
+  });
+  if (!response.ok) throw new Error('Failed to set player name');
+  const data = await response.json();
+  return data.playerName;
+}
+
+/**
+ * Get player profile
+ */
+export async function getPlayerProfile(): Promise<{ playerName: string; monsterCount: number }> {
+  try {
+    const sessionId = getSessionId();
+    const response = await fetch(`${API_BASE}/api/player/${sessionId}`);
+    if (!response.ok) return { playerName: 'Anonymous', monsterCount: 0 };
+    return await response.json();
+  } catch {
+    return { playerName: 'Anonymous', monsterCount: 0 };
+  }
+}
+
+/**
+ * Fetch global leaderboard
+ */
+export interface LeaderboardEntry {
+  rank: number;
+  sessionId: string;
+  playerName: string;
+  monsterCount: number;
+}
+
+export async function fetchLeaderboard(limit = 10): Promise<LeaderboardEntry[]> {
+  try {
+    const response = await fetch(`${API_BASE}/api/leaderboard?limit=${limit}`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.leaderboard || [];
+  } catch {
+    return [];
+  }
+}
+
 export { getSessionId };

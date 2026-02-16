@@ -35,6 +35,8 @@ async function ensureSession(sessionId) {
         await sessionRef.set({
             createdAt: FieldValue.serverTimestamp(),
             lastActive: FieldValue.serverTimestamp(),
+            monsterCount: 0,
+            playerName: 'Anonymous',
         });
         cloudLogger.log('INFO', 'New session created in Firestore', { sessionId });
     } else {
@@ -62,7 +64,10 @@ async function saveMonster(sessionId, monster) {
         capturedAt: FieldValue.serverTimestamp(),
     });
 
-    // Update global analytics atomically
+    // Update session monster count + global analytics atomically
+    const sessionRef = getDb().collection(SESSIONS_COLLECTION).doc(sessionId);
+    await sessionRef.update({ monsterCount: FieldValue.increment(1) });
+
     const statsRef = getDb().doc(ANALYTICS_DOC);
     await statsRef.set(
         {
@@ -135,12 +140,76 @@ async function getAnalytics() {
     return doc.exists ? doc.data() : { totalMonsters: 0, totalScans: 0, topObjects: {} };
 }
 
+/**
+ * Set a player's display name
+ * @param {string} sessionId - Browser session UUID
+ * @param {string} name - Player display name
+ * @returns {Promise<void>}
+ */
+async function setPlayerName(sessionId, name) {
+    await ensureSession(sessionId);
+    const sessionRef = getDb().collection(SESSIONS_COLLECTION).doc(sessionId);
+    await sessionRef.update({ playerName: name });
+    cloudLogger.log('INFO', 'Player name set', { sessionId, playerName: name });
+}
+
+/**
+ * Get a player's profile
+ * @param {string} sessionId - Browser session UUID
+ * @returns {Promise<Object|null>}
+ */
+async function getPlayerProfile(sessionId) {
+    const doc = await getDb().collection(SESSIONS_COLLECTION).doc(sessionId).get();
+    if (!doc.exists) return null;
+    const data = doc.data();
+    return {
+        sessionId: doc.id,
+        playerName: data.playerName || 'Anonymous',
+        monsterCount: data.monsterCount || 0,
+        lastActive: data.lastActive,
+        createdAt: data.createdAt,
+    };
+}
+
+/**
+ * Get the global leaderboard — top players by monster count
+ * @param {number} limit - Max entries (default 10)
+ * @returns {Promise<Object[]>} Ranked player list
+ */
+async function getLeaderboard(limit = 10) {
+    const snapshot = await getDb()
+        .collection(SESSIONS_COLLECTION)
+        .where('monsterCount', '>', 0)
+        .orderBy('monsterCount', 'desc')
+        .limit(limit)
+        .get();
+
+    const leaderboard = [];
+    let rank = 1;
+    snapshot.forEach((doc) => {
+        const data = doc.data();
+        leaderboard.push({
+            rank: rank++,
+            sessionId: doc.id,
+            playerName: data.playerName || 'Anonymous',
+            monsterCount: data.monsterCount || 0,
+            lastActive: data.lastActive,
+        });
+    });
+
+    cloudLogger.log('INFO', 'Leaderboard queried', { entries: leaderboard.length });
+    return leaderboard;
+}
+
 module.exports = {
     ensureSession,
     saveMonster,
     getCollection,
     getMonster,
     getAnalytics,
+    setPlayerName,
+    getPlayerProfile,
+    getLeaderboard,
     // Exported for testing
     _internals: { getDb, SESSIONS_COLLECTION, MONSTERS_SUBCOLLECTION, ANALYTICS_DOC },
 };

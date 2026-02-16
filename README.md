@@ -48,7 +48,7 @@
 
 ---
 
-## Google Cloud Services Integration (13 Services)
+## Google Cloud Services Integration (14 Services)
 
 | # | Service | Usage | File |
 |---|---------|-------|------|
@@ -58,13 +58,14 @@
 | 4 | **Cloud Firestore** | Persistent NoSQL storage — sessions, monster collections, global analytics counters | [`services/firestoreService.js`](services/firestoreService.js) |
 | 5 | **Cloud Storage (GCS)** | Dual-bucket architecture — raw scan staging + processed monster image hosting with signed URLs | [`services/storageService.js`](services/storageService.js) |
 | 6 | **Cloud Logging** | Structured JSON logging with severity levels, auto-ingested by Cloud Run | [`services/loggingService.js`](services/loggingService.js) |
-| 7 | **Cloud Run** | Containerized serverless deployment with auto-scaling (0–10 instances), health checks | [`Dockerfile`](Dockerfile) |
-| 8 | **Artifact Registry** | Docker container image storage for Cloud Run deployments | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) |
-| 9 | **Secret Manager** | Secure storage for sensitive credentials (reCAPTCHA secret key) | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) |
-| 10 | **IAM & Service Accounts** | Fine-grained access control — dedicated service account with least-privilege roles | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) |
-| 11 | **Firebase Analytics (GA4)** | Client-side event tracking — scan events, collection views, error rates | [`index.html`](index.html) |
-| 12 | **reCAPTCHA Enterprise (v3)** | Invisible bot protection with score-based filtering on scan endpoint | [`middleware/recaptcha.js`](middleware/recaptcha.js) |
-| 13 | **Cloud Build** | Alternative CI/CD pipeline (test → build → deploy) | [`cloudbuild.yaml`](cloudbuild.yaml) |
+| 7 | **Cloud Translation API** | Multi-language monster lore translation (10 languages supported) | [`services/translationService.js`](services/translationService.js) |
+| 8 | **Cloud Run** | Containerized serverless deployment with auto-scaling (0–10 instances), health checks | [`Dockerfile`](Dockerfile) |
+| 9 | **Artifact Registry** | Docker container image storage for Cloud Run deployments | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) |
+| 10 | **Secret Manager** | Secure storage for sensitive credentials (reCAPTCHA secret key) | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) |
+| 11 | **IAM & Service Accounts** | Fine-grained access control — dedicated service account with least-privilege roles | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) |
+| 12 | **Firebase Analytics (GA4)** | Client-side event tracking — scan events, collection views, error rates | [`index.html`](index.html) |
+| 13 | **reCAPTCHA Enterprise (v3)** | Invisible bot protection with score-based filtering on scan endpoint | [`middleware/recaptcha.js`](middleware/recaptcha.js) |
+| 14 | **Cloud Build** | Alternative CI/CD pipeline (test → build → deploy) | [`cloudbuild.yaml`](cloudbuild.yaml) |
 
 ---
 

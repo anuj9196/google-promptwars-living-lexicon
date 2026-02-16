@@ -15,17 +15,20 @@ try { helmet = require('helmet'); } catch { helmet = null; }
 try { compression = require('compression'); } catch { compression = null; }
 
 // Services
-let vertexAI, firestoreService, storageService, cacheService;
+let vertexAI, firestoreService, storageService, cacheService, translationService;
 try {
   vertexAI = require('./services/vertexAIService');
   firestoreService = require('./services/firestoreService');
   storageService = require('./services/storageService');
   cacheService = require('./services/cacheService');
+  translationService = require('./services/translationService');
 } catch (err) {
   console.warn('Google Cloud services not available (running locally without deps):', err.message);
 }
 
 const { cloudLogger } = require('./services/loggingService');
+const { errorHandler, ValidationError, ServiceUnavailableError } = require('./utils/errors');
+const { requireFields, maxPayloadSize, sanitizeString } = require('./middleware/validator');
 
 let rateLimiter;
 try { rateLimiter = require('./middleware/rateLimiter'); } catch { rateLimiter = null; }
@@ -295,6 +298,106 @@ app.get('/api/cache/stats', (req, res) => {
   }
 });
 
+/**
+ * POST /api/player — Set player display name
+ * Body: { sessionId: string, name: string }
+ */
+app.post('/api/player', async (req, res) => {
+  try {
+    const { sessionId, name } = req.body;
+    if (!sessionId || !name || typeof name !== 'string') {
+      return res.status(400).json({ error: 'sessionId and name required', code: 'INVALID_INPUT' });
+    }
+    const sanitizedName = name.trim().substring(0, 20);
+    if (!sanitizedName) {
+      return res.status(400).json({ error: 'Name cannot be empty', code: 'INVALID_INPUT' });
+    }
+
+    if (!firestoreService) {
+      return res.status(503).json({ error: 'Firestore unavailable', code: 'SERVICES_UNAVAILABLE' });
+    }
+
+    await firestoreService.setPlayerName(sessionId, sanitizedName);
+    res.json({ success: true, playerName: sanitizedName });
+  } catch (err) {
+    cloudLogger.log('ERROR', 'Set player name failed', { error: err.message });
+    res.status(500).json({ error: 'Failed to set player name', code: 'PLAYER_ERROR' });
+  }
+});
+
+/**
+ * GET /api/player/:sessionId — Get player profile
+ */
+app.get('/api/player/:sessionId', async (req, res) => {
+  try {
+    if (!firestoreService) {
+      return res.json({ playerName: 'Anonymous', monsterCount: 0 });
+    }
+    const profile = await firestoreService.getPlayerProfile(req.params.sessionId);
+    res.json(profile || { playerName: 'Anonymous', monsterCount: 0 });
+  } catch (err) {
+    cloudLogger.log('ERROR', 'Get player profile failed', { error: err.message });
+    res.status(500).json({ error: 'Failed to get profile' });
+  }
+});
+
+/**
+ * GET /api/leaderboard — Global leaderboard (top players by monster count)
+ * Query: ?limit=10
+ */
+app.get('/api/leaderboard', async (req, res) => {
+  try {
+    if (!firestoreService) {
+      return res.json({ leaderboard: [], total: 0 });
+    }
+    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+    const leaderboard = await firestoreService.getLeaderboard(limit);
+    res.json({ leaderboard, total: leaderboard.length });
+  } catch (err) {
+    cloudLogger.log('ERROR', 'Leaderboard retrieval failed', { error: err.message });
+    res.status(500).json({ error: 'Leaderboard unavailable', code: 'LEADERBOARD_ERROR' });
+  }
+});
+
+/**
+ * POST /api/translate — Translate monster lore via Cloud Translation API
+ * Body: { text: string, targetLanguage: string }
+ * Returns: { translatedText: string, targetLanguage: string }
+ */
+app.post('/api/translate', sanitizeString('text', 2000), async (req, res) => {
+  try {
+    const { text, targetLanguage } = req.body;
+    if (!text || !targetLanguage) {
+      return res.status(400).json({ error: 'text and targetLanguage required', code: 'INVALID_INPUT' });
+    }
+
+    if (!translationService) {
+      return res.status(503).json({ error: 'Translation unavailable', code: 'SERVICES_UNAVAILABLE' });
+    }
+
+    const result = await translationService.translateText(text, targetLanguage);
+    if (!result) {
+      return res.status(400).json({ error: 'Translation failed or unsupported language', code: 'TRANSLATION_ERROR' });
+    }
+
+    res.json(result);
+  } catch (err) {
+    cloudLogger.log('ERROR', 'Translation endpoint failure', { error: err.message });
+    res.status(500).json({ error: 'Translation failed', code: 'TRANSLATION_ERROR' });
+  }
+});
+
+/**
+ * GET /api/languages — Get supported translation languages
+ */
+app.get('/api/languages', (req, res) => {
+  if (translationService) {
+    res.json({ languages: translationService.getSupportedLanguages() });
+  } else {
+    res.json({ languages: {} });
+  }
+});
+
 // ─── Transpilation Middleware (dev mode) ─────────────────────────────────────
 const resolveFile = (urlPath) => {
   const fullPath = path.join(__dirname, urlPath);
@@ -357,6 +460,9 @@ app.use(express.static(__dirname, {
     }
   },
 }));
+
+// ─── Error Handler (must be last middleware) ────────────────────────────────
+app.use(errorHandler);
 
 // ─── Start Server ────────────────────────────────────────────────────────────
 app.listen(PORT, () => {

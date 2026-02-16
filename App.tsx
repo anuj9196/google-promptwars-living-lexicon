@@ -1,11 +1,12 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AppStatus, Monster } from './types';
-import { analyzeImage, generateMonsterVisual, getLoreAudio, cloudLogger, storageService, fetchCollection, trackEvent, getSessionId } from './services/geminiService';
+import { analyzeImage, generateMonsterVisual, getLoreAudio, cloudLogger, storageService, fetchCollection, trackEvent, getSessionId, setPlayerName, getPlayerProfile, fetchLeaderboard } from './services/geminiService';
 import MonsterCard from './components/MonsterCard';
 import MonsterModal from './components/MonsterModal';
 import ScannerOverlay from './components/ScannerOverlay';
 import TutorialOverlay from './components/TutorialOverlay';
+import Leaderboard from './components/Leaderboard';
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
@@ -17,6 +18,10 @@ const App: React.FC = () => {
   const [isFixating, setIsFixating] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [telemetryTime, setTelemetryTime] = useState(Date.now());
+  const [playerName, setPlayerNameState] = useState<string>('');
+  const [showNamePrompt, setShowNamePrompt] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -55,6 +60,16 @@ const App: React.FC = () => {
       setShowTutorial(true);
     }
 
+    // Load player name or prompt for one
+    const savedName = localStorage.getItem('lexicon_player_name');
+    if (savedName) {
+      setPlayerNameState(savedName);
+    } else {
+      // Show name prompt after tutorial
+      const tutorialSeen = localStorage.getItem('has_seen_tutorial');
+      if (tutorialSeen) setShowNamePrompt(true);
+    }
+
     // Track page view via Firebase Analytics
     trackEvent('page_view', { page_title: 'Living Lexicon' });
 
@@ -72,6 +87,27 @@ const App: React.FC = () => {
     localStorage.setItem('has_seen_tutorial', 'true');
     initAudio();
     trackEvent('tutorial_dismissed');
+    // Show name prompt after tutorial
+    if (!localStorage.getItem('lexicon_player_name')) {
+      setShowNamePrompt(true);
+    }
+  };
+
+  const handleSetPlayerName = async () => {
+    const name = nameInput.trim();
+    if (!name) return;
+    try {
+      const savedName = await setPlayerName(name);
+      setPlayerNameState(savedName);
+      localStorage.setItem('lexicon_player_name', savedName);
+      setShowNamePrompt(false);
+      trackEvent('player_name_set', { name: savedName });
+    } catch {
+      // Save locally even if server fails
+      setPlayerNameState(name);
+      localStorage.setItem('lexicon_player_name', name);
+      setShowNamePrompt(false);
+    }
   };
 
   useEffect(() => {
@@ -254,8 +290,8 @@ const App: React.FC = () => {
       </div>
 
       {/* NEURAL INTERFACE LAYER */}
-      <div id="main-content" className="relative z-10 flex-1 flex flex-col pointer-events-auto">
-        <header className="p-6 md:p-8 flex justify-between items-start">
+      <div id="main-content" className={`relative z-10 flex-1 flex flex-col ${status === AppStatus.AR_MODE ? 'pointer-events-none' : 'pointer-events-auto'}`}>
+        <header className="p-6 md:p-8 flex justify-between items-start pointer-events-auto">
           <div className="bg-black/60 backdrop-blur-xl border border-cyan-500/30 p-4 rounded-xl flex items-center gap-4">
             <div className="w-10 h-10 rounded-lg bg-cyan-500/10 border border-cyan-500/40 flex items-center justify-center">
               <svg className="w-6 h-6 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2L12 22M2 12L22 12M12 2L19 9M12 22L5 15M2 12L9 5M22 12L15 19" /></svg>
@@ -269,6 +305,20 @@ const App: React.FC = () => {
           {status !== AppStatus.IDLE && (
             <button onClick={() => { setStatus(AppStatus.IDLE); clearTarget(); }} className="bg-red-900/50 border border-red-500/40 px-6 py-3 rounded-xl font-orbitron text-[10px] tracking-widest text-white uppercase shadow-lg hover:bg-red-800 transition-colors">Exit Interface</button>
           )}
+          <div className="flex items-center gap-3">
+            {playerName && (
+              <span className="hidden sm:block text-[9px] font-mono text-cyan-400/60 tracking-widest uppercase">{playerName}</span>
+            )}
+            <button
+              onClick={() => setShowLeaderboard(true)}
+              aria-label="Open leaderboard"
+              className="bg-magenta-500/10 border border-magenta-500/30 w-11 h-11 rounded-xl flex items-center justify-center hover:bg-magenta-500/20 hover:border-magenta-400/50 transition-all"
+            >
+              <svg className="w-5 h-5 text-magenta-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" />
+              </svg>
+            </button>
+          </div>
         </header>
 
         {status === AppStatus.IDLE && !currentDetection && !activeMonster && (
@@ -445,6 +495,47 @@ const App: React.FC = () => {
       )}
 
       {activeMonster && <MonsterModal monster={activeMonster} onClose={() => setActiveMonster(null)} />}
+      {showLeaderboard && <Leaderboard onClose={() => setShowLeaderboard(false)} />}
+
+      {/* Player Name Prompt — only show on IDLE to avoid blocking scanner */}
+      {showNamePrompt && status === AppStatus.IDLE && (
+        <div className="fixed inset-0 z-[260] bg-[#05070a]/95 backdrop-blur-2xl flex items-center justify-center p-4" role="dialog" aria-label="Set your player name" aria-modal="true">
+          <div className="w-full max-w-sm animate-in zoom-in-95 duration-500">
+            <div className="bg-black/70 backdrop-blur-3xl border border-cyan-500/30 rounded-3xl p-8 text-center space-y-6">
+              <div className="w-16 h-16 mx-auto rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center">
+                <svg className="w-8 h-8 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 3a4 4 0 100 8 4 4 0 000-8z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-orbitron text-lg font-bold neon-text-cyan tracking-widest uppercase">Identify Yourself</h3>
+                <p className="text-[10px] font-mono text-slate-500 mt-2 tracking-widest uppercase">Your name will appear on the global leaderboard</p>
+              </div>
+              <input
+                type="text"
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSetPlayerName()}
+                placeholder="Enter your codename..."
+                maxLength={20}
+                autoFocus
+                className="w-full bg-white/5 border border-cyan-500/30 rounded-xl px-4 py-3 text-center font-orbitron text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/30 transition-all"
+              />
+              <div className="flex gap-3">
+                <button
+                  onClick={() => { setShowNamePrompt(false); setPlayerNameState('Anonymous'); localStorage.setItem('lexicon_player_name', 'Anonymous'); }}
+                  className="flex-1 px-4 py-3 rounded-xl border border-white/10 text-[10px] font-orbitron tracking-widest uppercase text-slate-400 hover:bg-white/5 transition-all"
+                >Skip</button>
+                <button
+                  onClick={handleSetPlayerName}
+                  disabled={!nameInput.trim()}
+                  className="flex-1 px-4 py-3 rounded-xl bg-cyan-500/20 border border-cyan-500/40 text-[10px] font-orbitron tracking-widest uppercase text-cyan-300 hover:bg-cyan-500/30 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                >Confirm</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
