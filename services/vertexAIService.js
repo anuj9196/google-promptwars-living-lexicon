@@ -82,10 +82,11 @@ async function retry(fn, retries = 3, delay = 1000) {
  */
 async function analyzeImage(base64Image) {
   return retry(async () => {
-    const model = getVertexAI().getGenerativeModel({ model: GEMINI_MODEL });
+    const model = getGenAI().models;
     const startTime = Date.now();
 
     const response = await model.generateContent({
+      model: GEMINI_MODEL,
       contents: [
         {
           role: 'user',
@@ -97,7 +98,7 @@ async function analyzeImage(base64Image) {
           ],
         },
       ],
-      generationConfig: {
+      config: {
         responseMimeType: 'application/json',
         responseSchema: MONSTER_SCHEMA,
       },
@@ -111,7 +112,7 @@ async function analyzeImage(base64Image) {
     });
 
     const text =
-      response.response?.candidates?.[0]?.content?.parts?.[0]?.text;
+      response.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error('Gemini returned empty analysis.');
     return { ...JSON.parse(text.trim()), _metrics: { analysisLatencyMs: latencyMs, model: GEMINI_MODEL } };
   });
