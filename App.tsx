@@ -280,14 +280,22 @@ const App: React.FC = () => {
 
       {/* PHOTONIC BACKGROUND & VIEWPORT */}
       <div
-        onPointerDown={() => status === AppStatus.AR_MODE && setIsFixating(true)}
-        onPointerUp={() => setIsFixating(false)}
         className={`fixed inset-0 z-0 transition-opacity duration-1000 ${[AppStatus.AR_MODE, AppStatus.STAGING_TO_GCS, AppStatus.EVOLVING, AppStatus.GENERATING_VISUAL, AppStatus.LOGGING_METRICS].includes(status) || currentDetection ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
       >
         <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover grayscale-[15%] brightness-[0.7] contrast-[1.1]" />
         <canvas ref={canvasRef} className="hidden" />
         <ScannerOverlay isFixating={isFixating} progress={scanProgress} />
       </div>
+
+      {/* TOUCH TARGET — Receives hold-to-scan pointer events in AR mode */}
+      {status === AppStatus.AR_MODE && !currentDetection && !activeMonster && (
+        <div
+          onPointerDown={() => setIsFixating(true)}
+          onPointerUp={() => setIsFixating(false)}
+          onPointerCancel={() => setIsFixating(false)}
+          className="fixed inset-0 z-[5]"
+        />
+      )}
 
       {/* NEURAL INTERFACE LAYER */}
       <div id="main-content" className={`relative z-10 flex-1 flex flex-col ${status === AppStatus.AR_MODE ? 'pointer-events-none' : 'pointer-events-auto'}`}>
