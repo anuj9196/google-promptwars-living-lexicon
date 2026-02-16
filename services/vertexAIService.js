@@ -26,7 +26,7 @@ function getGenAI() {
 }
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
-const IMAGEN_MODEL = 'imagen-3.0-fast-generate-001';
+const IMAGEN_MODEL = 'imagen-3.0-generate-001';
 
 const MONSTER_SCHEMA = {
   type: 'OBJECT',
@@ -144,7 +144,10 @@ async function generateMonsterVisual(monsterData) {
 
     const latencyMs = Date.now() - startTime;
     const base64Data = response.generatedImages?.[0]?.image?.imageBytes;
-    if (!base64Data) throw new Error('Imagen generation returned no image data.');
+    if (!base64Data) {
+      cloudLogger.log('ERROR', 'Imagen output missing base64 data', { response: JSON.stringify(response) });
+      throw new Error('Imagen generation returned no image data.');
+    }
 
     cloudLogger.log('INFO', 'Imagen visual generated', {
       latencyMs,

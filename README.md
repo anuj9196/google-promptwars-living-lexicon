@@ -53,7 +53,7 @@
 | # | Service | Usage | File |
 |---|---------|-------|------|
 | 1 | **Vertex AI (Gemini 2.5 Flash)** | Object analysis, lore generation, structured JSON output with schema enforcement | [`services/vertexAIService.js`](services/vertexAIService.js) |
-| 2 | **Vertex AI (Imagen 3.0 Fast)** | Monster visual generation — hyper-realistic 3D renders from text prompts | [`services/vertexAIService.js`](services/vertexAIService.js) |
+| 2 | **Vertex AI (Imagen 3.0)** | Monster visual generation — hyper-realistic 3D renders from text prompts | [`services/vertexAIService.js`](services/vertexAIService.js) |
 | 3 | **Vertex AI (Gemini 2.5 Flash TTS)** | Text-to-speech narration of monster lore with Kore voice | [`services/vertexAIService.js`](services/vertexAIService.js) |
 | 4 | **Cloud Firestore** | Persistent NoSQL storage — sessions, monster collections, global analytics counters | [`services/firestoreService.js`](services/firestoreService.js) |
 | 5 | **Cloud Storage (GCS)** | Dual-bucket architecture — raw scan staging + processed monster image hosting with signed URLs | [`services/storageService.js`](services/storageService.js) |
