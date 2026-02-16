@@ -13,6 +13,7 @@ const App: React.FC = () => {
   const [activeMonster, setActiveMonster] = useState<Monster | null>(null);
   const [currentDetection, setCurrentDetection] = useState<Monster | null>(null);
   const [scanProgress, setScanProgress] = useState(0);
+  const [isFixating, setIsFixating] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -54,7 +55,7 @@ const App: React.FC = () => {
     localStorage.setItem('cyberdex_collection', JSON.stringify(collection));
   }, [collection]);
 
-  // Optical Interface: Camera management with detailed error catching
+  // Optical Interface: Camera management
   useEffect(() => {
     const isOpticalMode = status === AppStatus.AR_MODE || !!currentDetection || status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL;
     
@@ -67,13 +68,11 @@ const App: React.FC = () => {
             });
             streamRef.current = stream;
             if (videoRef.current) videoRef.current.srcObject = stream;
-            setErrorMessage(null); // Clear previous errors on success
+            setErrorMessage(null);
           } catch (err: any) {
             console.error("Optics Malfunction:", err);
             if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-              setErrorMessage("NEURAL LINK DENIED: Please enable camera access in browser settings to initialize optics.");
-            } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-              setErrorMessage("HARDWARE MALFUNCTION: No optical imaging devices detected on this unit.");
+              setErrorMessage("NEURAL LINK DENIED: Please enable camera access in browser settings.");
             } else {
               setErrorMessage("SYSTEM ERROR: Failed to initialize photonic sensor array.");
             }
@@ -90,25 +89,26 @@ const App: React.FC = () => {
     }
   }, [status, currentDetection]);
 
-  // 3-Second Auto-Scan Logic
+  // Updated Fixation Timer Logic: Only runs while user is "Holding" the screen
   useEffect(() => {
     let interval: number | undefined;
-    if (status === AppStatus.AR_MODE && !currentDetection && !activeMonster) {
+    if (status === AppStatus.AR_MODE && isFixating && !currentDetection && !activeMonster) {
       interval = window.setInterval(() => {
         setScanProgress(prev => {
           if (prev >= 100) {
             clearInterval(interval);
+            setIsFixating(false);
             captureFrame();
-            return 0;
+            return 100;
           }
-          return prev + 2.5; 
+          return prev + 2; // ~3s for 100% (60ms * 50 steps)
         });
       }, 60);
-    } else {
+    } else if (!isFixating) {
       setScanProgress(0);
     }
     return () => clearInterval(interval);
-  }, [status, currentDetection, activeMonster]);
+  }, [status, isFixating, currentDetection, activeMonster]);
 
   const stopAudio = useCallback(() => {
     if (audioSourceRef.current) {
@@ -192,6 +192,7 @@ const App: React.FC = () => {
     stopAudio();
     setCurrentDetection(null);
     setScanProgress(0);
+    setIsFixating(false);
   }, [stopAudio]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -208,67 +209,74 @@ const App: React.FC = () => {
   };
 
   const enterAR = async () => {
-    setErrorMessage(null); // Clear errors when trying again
+    setErrorMessage(null);
     initAudio();
     await ensureApiKey();
     setStatus(AppStatus.AR_MODE);
   };
 
+  const startFixation = () => {
+    if (status === AppStatus.AR_MODE && !currentDetection && !activeMonster) {
+      setIsFixating(true);
+      // Optional: Trigger haptic feedback if available
+      if (window.navigator.vibrate) window.navigator.vibrate(10);
+    }
+  };
+
+  const endFixation = () => {
+    setIsFixating(false);
+  };
+
   return (
-    <div className="relative min-h-screen w-screen bg-[#05070a] text-white overflow-x-hidden flex flex-col font-inter">
+    <div className="relative min-h-screen w-screen bg-[#05070a] text-white overflow-x-hidden flex flex-col font-inter select-none">
       
-      {/* 0. GLOBAL ERROR HUD (Top Overlay) */}
+      {/* 0. GLOBAL ERROR HUD */}
       {errorMessage && (
-        <div 
-          role="alert"
-          className="fixed top-24 left-1/2 -translate-x-1/2 z-[300] w-[90%] max-w-xl animate-in slide-in-from-top-4 duration-500"
-        >
+        <div role="alert" className="fixed top-24 left-1/2 -translate-x-1/2 z-[300] w-[90%] max-w-xl animate-in slide-in-from-top-4 duration-500">
           <div className="bg-red-950/80 backdrop-blur-2xl border border-red-500/50 p-4 rounded-xl flex items-center justify-between shadow-[0_0_40px_rgba(239,68,68,0.3)]">
             <div className="flex items-center gap-4">
               <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center shrink-0">
-                <svg className="w-6 h-6 text-red-500 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
+                <svg className="w-6 h-6 text-red-500 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
               </div>
-              <p className="font-orbitron text-[10px] sm:text-xs tracking-widest text-red-100 uppercase leading-relaxed">
-                {errorMessage}
-              </p>
+              <p className="font-orbitron text-[10px] tracking-widest text-red-100 uppercase">{errorMessage}</p>
             </div>
-            <button 
-              onClick={() => setErrorMessage(null)}
-              className="ml-4 p-2 text-red-400 hover:text-white transition-colors"
-              aria-label="Dismiss Alert"
-            >
+            <button onClick={() => setErrorMessage(null)} className="p-2 text-red-400 hover:text-white" aria-label="Dismiss Alert">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
         </div>
       )}
 
-      {/* 1. PHOTONIC BACKGROUND */}
+      {/* 1. PHOTONIC BACKGROUND & VIEWPORT */}
       <div 
         aria-hidden="true"
+        onPointerDown={startFixation}
+        onPointerUp={endFixation}
+        onPointerLeave={endFixation}
         className={`fixed inset-0 z-0 transition-opacity duration-1000 ${(status === AppStatus.AR_MODE || currentDetection || status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
       >
-        <video 
-          ref={videoRef} 
-          autoPlay 
-          playsInline 
-          muted 
-          className="h-full w-full object-cover grayscale-[15%] brightness-[0.7] contrast-[1.1]"
-        />
+        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover grayscale-[15%] brightness-[0.7] contrast-[1.1]" />
         <canvas ref={canvasRef} className="hidden" />
-        <ScannerOverlay />
+        <ScannerOverlay isFixating={isFixating} progress={scanProgress} />
         
+        {/* Fixation Prompt / Progress HUD */}
         {status === AppStatus.AR_MODE && !currentDetection && !activeMonster && (
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-24 flex flex-col items-center gap-3 pointer-events-none">
-            <div className="w-56 h-1.5 bg-white/10 rounded-full overflow-hidden border border-white/5">
-              <div 
-                className="h-full bg-cyan-400 shadow-[0_0_15px_#00f2ff] transition-all duration-100" 
-                style={{ width: `${scanProgress}%` }}
-              ></div>
-            </div>
-            <span className="text-[10px] font-orbitron tracking-[0.5em] text-cyan-400 animate-pulse uppercase">Fixating on Reality...</span>
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-24 flex flex-col items-center gap-4 pointer-events-none">
+            {isFixating ? (
+              <>
+                <div className="w-56 h-1.5 bg-white/10 rounded-full overflow-hidden border border-white/5">
+                  <div className="h-full bg-cyan-400 shadow-[0_0_15px_#00f2ff] transition-all duration-100" style={{ width: `${scanProgress}%` }}></div>
+                </div>
+                <span className="text-[10px] font-orbitron tracking-[0.5em] text-cyan-400 animate-pulse uppercase">Neural Linking...</span>
+              </>
+            ) : (
+              <div className="flex flex-col items-center gap-2 animate-bounce">
+                <div className="w-12 h-12 rounded-full border-2 border-cyan-400/30 flex items-center justify-center">
+                  <div className="w-2 h-2 bg-cyan-400 rounded-full"></div>
+                </div>
+                <span className="text-[10px] font-orbitron tracking-[0.4em] text-white/40 uppercase">Hold Screen to Fixate</span>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -295,14 +303,11 @@ const App: React.FC = () => {
         {status === AppStatus.IDLE && !currentDetection && !activeMonster && (
           <main className="flex-1 flex flex-col items-center justify-center p-6 pointer-events-auto animate-in fade-in duration-1000">
             <div className="max-w-6xl w-full flex flex-col items-center gap-16">
-              
               <div className="relative group">
                 <button 
                   onClick={enterAR}
-                  aria-label="Enter Augmented Reality Scanning Mode"
                   className="relative z-20 w-64 h-64 rounded-full bg-black/60 backdrop-blur-2xl border-4 border-cyan-500/20 flex flex-col items-center justify-center gap-6 hover:border-cyan-400 hover:scale-105 transition-all group active:scale-95 shadow-[0_0_80px_rgba(0,242,255,0.15)] overflow-hidden outline-none"
                 >
-                  <div className="absolute inset-0 bg-cyan-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
                   <svg xmlns="http://www.w3.org/2000/svg" className="w-20 h-20 text-cyan-400 group-hover:neon-text-cyan transition-all" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -310,27 +315,21 @@ const App: React.FC = () => {
                   <span className="font-orbitron font-bold text-cyan-400 tracking-[0.4em] text-xs uppercase">Initialize Optics</span>
                 </button>
                 <div className="absolute -inset-6 rounded-full border border-cyan-500/10 animate-[pulse_4s_ease-in-out_infinite] pointer-events-none"></div>
-                <div className="absolute -inset-12 rounded-full border border-magenta-500/5 animate-[pulse_3s_ease-in-out_infinite_reverse] pointer-events-none"></div>
               </div>
 
               <div className="flex flex-col items-center gap-4">
                 <label className="cursor-pointer flex items-center gap-3 text-cyan-500/50 hover:text-cyan-400 transition-all font-orbitron text-[10px] tracking-[0.5em] uppercase hover:tracking-[0.6em] rounded p-1">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                   Neural Feed Upload
                   <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
                 </label>
                 <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-[8px] font-mono text-cyan-500/30 hover:text-cyan-500 transition-colors uppercase tracking-widest">Billing Documentation</a>
               </div>
 
-              <section className="w-full" aria-labelledby="gallery-title">
+              <section className="w-full">
                 <div className="flex items-center justify-between mb-8 border-b border-white/10 pb-4">
-                  <h2 id="gallery-title" className="text-xl font-orbitron font-bold neon-text-cyan flex items-center gap-4">
-                    <span className="w-2.5 h-2.5 bg-cyan-400 rounded-full shadow-[0_0_10px_#00f2ff]"></span>
-                    NEURAL ARCHIVE
-                  </h2>
+                  <h2 className="text-xl font-orbitron font-bold neon-text-cyan flex items-center gap-4">NEURAL ARCHIVE</h2>
                   <span className="font-mono text-cyan-500/50 text-[10px] tracking-widest uppercase">SYMBOLS: {collection.length}</span>
                 </div>
-
                 {collection.length === 0 ? (
                   <div className="py-28 flex flex-col items-center justify-center border border-dashed border-white/10 rounded-3xl opacity-30 bg-white/[0.02]">
                     <p className="font-orbitron text-[10px] tracking-[0.6em] uppercase">Archive buffer empty</p>
@@ -344,72 +343,39 @@ const App: React.FC = () => {
                 )}
               </section>
             </div>
-            <div className="h-24"></div>
           </main>
         )}
 
         {currentDetection && (
           <div className="fixed bottom-12 left-1/2 -translate-x-1/2 w-[92%] max-w-md pointer-events-auto animate-in slide-in-from-bottom-12 fade-in duration-700">
-            <div 
-              onClick={() => setActiveMonster(currentDetection)}
-              className="bg-black/70 backdrop-blur-2xl border-2 border-cyan-500/50 rounded-2xl p-5 shadow-[0_0_80px_rgba(0,242,255,0.4)] flex items-center gap-5 cursor-pointer hover:border-white hover:scale-[1.02] transition-all group outline-none"
-            >
-              <div className="w-24 h-24 rounded-xl overflow-hidden border border-white/20 shrink-0 relative shadow-inner">
-                <img src={currentDetection.imageUrl} className="w-full h-full object-cover brightness-110 group-hover:scale-110 transition-transform duration-1000" alt="" />
-                <div className="absolute inset-0 bg-cyan-500/20 mix-blend-overlay"></div>
+            <div onClick={() => setActiveMonster(currentDetection)} className="bg-black/70 backdrop-blur-2xl border-2 border-cyan-500/50 rounded-2xl p-5 shadow-[0_0_80px_rgba(0,242,255,0.4)] flex items-center gap-5 cursor-pointer hover:border-white transition-all group outline-none">
+              <div className="w-24 h-24 rounded-xl overflow-hidden border border-white/20 shrink-0 relative">
+                <img src={currentDetection.imageUrl} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000" alt="" />
               </div>
               <div className="flex-1">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h3 className="font-orbitron font-bold text-2xl neon-text-cyan leading-none tracking-tighter uppercase">{currentDetection.name}</h3>
-                    <div className="flex gap-1.5 mt-2.5">
-                      {currentDetection.types.map(t => (
-                        <span key={t} className="text-[10px] px-2.5 py-0.5 bg-cyan-900/50 border border-cyan-500/30 text-cyan-200 font-bold uppercase tracking-widest rounded shadow-sm">
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); clearTarget(); }}
-                    aria-label="Clear Target Detection"
-                    className="p-2 -mt-2 -mr-2 text-white/30 hover:text-white hover:bg-white/10 rounded-full transition-all"
-                  >
-                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                  </button>
+                <h3 className="font-orbitron font-bold text-2xl neon-text-cyan uppercase leading-none">{currentDetection.name}</h3>
+                <div className="flex gap-1.5 mt-2.5">
+                  {currentDetection.types.map(t => (
+                    <span key={t} className="text-[10px] px-2 py-0.5 bg-cyan-900/50 border border-cyan-500/30 text-cyan-200 font-bold uppercase tracking-widest rounded">{t}</span>
+                  ))}
                 </div>
-                <p className="text-[11px] text-white/50 mt-4 font-mono tracking-tight line-clamp-2 italic leading-relaxed border-l border-white/10 pl-2">
-                  Object: {currentDetection.originalObject}
-                </p>
+                <p className="text-[11px] text-white/50 mt-4 font-mono line-clamp-2 italic">Object: {currentDetection.originalObject}</p>
               </div>
             </div>
-            <button onClick={clearTarget} className="mt-6 mx-auto block px-8 py-2.5 bg-black/50 border border-white/10 rounded-full font-orbitron text-[10px] tracking-[0.4em] uppercase hover:bg-magenta-500/30 hover:border-magenta-500 transition-all text-white/40 hover:text-white shadow-xl">
-              Clear Optics
-            </button>
           </div>
         )}
       </div>
 
       {(status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL) && (
-        <div role="status" aria-busy="true" className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center">
+        <div className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center">
           <div className="relative w-64 h-64 flex items-center justify-center">
             <div className="absolute inset-0 border-2 border-cyan-500/20 rounded-full animate-[spin_6s_linear_infinite]"></div>
-            <div className="absolute inset-6 border border-dashed border-magenta-500/40 rounded-full animate-[spin_10s_linear_infinite_reverse]"></div>
-            <div className="flex flex-col items-center gap-3">
-              <span className="font-orbitron text-2xl font-black neon-text-cyan tracking-[0.2em] animate-pulse">
-                {status === AppStatus.EVOLVING ? 'ANALYZING' : 'SYNTHESIZING'}
-              </span>
-            </div>
+            <span className="font-orbitron text-2xl font-black neon-text-cyan tracking-[0.2em] animate-pulse">{status === AppStatus.EVOLVING ? 'ANALYZING' : 'SYNTHESIZING'}</span>
           </div>
-          <p className="mt-10 text-[11px] font-mono tracking-[0.5em] uppercase text-white/40 max-w-xs leading-relaxed">
-            Constructing digital biological architecture from target photonic data...
-          </p>
         </div>
       )}
 
-      {activeMonster && (
-        <MonsterModal monster={activeMonster} onClose={() => setActiveMonster(null)} />
-      )}
+      {activeMonster && <MonsterModal monster={activeMonster} onClose={() => setActiveMonster(null)} />}
     </div>
   );
 };
