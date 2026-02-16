@@ -1,6 +1,12 @@
 
-import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { Monster } from "../types";
+
+/**
+ * API Client — All AI calls now routed through server-side endpoints
+ * No direct Gemini SDK usage; no API keys exposed client-side
+ */
+
+const API_BASE = '';
 
 /**
  * Enterprise Structured Logging Utility
@@ -12,123 +18,103 @@ export const cloudLogger = {
       severity,
       message,
       timestamp: new Date().toISOString(),
-      service: "living-lexicon-logic-core",
+      service: "living-lexicon-client",
       ...payload,
     };
-    console.log(JSON.stringify(logEntry)); // Direct output for Cloud Logging ingestion
+    console.log(JSON.stringify(logEntry));
+
+    // Send to server for Cloud Logging ingestion
+    fetch(`${API_BASE}/api/log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(logEntry),
+    }).catch(() => { });
   }
 };
 
 /**
- * Simulated Google Cloud Storage (GCS) Service
- * Demonstrates intermediate data persistence for audit and training
+ * Cloud Storage staging — now routed through server
  */
 export const storageService = {
   uploadToStaging: async (base64: string, objectName: string): Promise<string> => {
-    cloudLogger.log('INFO', 'Staging photonic data to GCS bucket', { bucket: 'lexicon-raw-ingest', objectName });
-    // Simulate network latency for enterprise upload
-    await new Promise(resolve => setTimeout(resolve, 800)); 
+    cloudLogger.log('INFO', 'Staging photonic data via server API', { objectName });
+    // Storage upload now happens server-side in the scan pipeline
     return `gs://lexicon-raw-ingest/${objectName}.jpg`;
   }
 };
 
-const MONSTER_SCHEMA = {
-  type: Type.OBJECT,
-  properties: {
-    name: { type: Type.STRING, description: "Creative monster name based on the object." },
-    originalObject: { type: Type.STRING, description: "The object identified in the image." },
-    types: { 
-      type: Type.ARRAY, 
-      items: { type: Type.STRING },
-      description: "Exactly two elemental or thematic types." 
-    },
-    lore: { type: Type.STRING, description: "A creative Pokedex-style lore entry." },
-    moves: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          name: { type: Type.STRING },
-          power: { type: Type.NUMBER },
-          description: { type: Type.STRING }
-        },
-        required: ["name", "power", "description"]
-      }
-    }
-  },
-  required: ["name", "originalObject", "types", "lore", "moves"]
-};
-
-async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
+/**
+ * Get reCAPTCHA v3 token for scan requests
+ */
+async function getRecaptchaToken(): Promise<string> {
   try {
-    return await fn();
-  } catch (err: any) {
-    cloudLogger.log('WARNING', 'API Call Retrying...', { error: err.message, retriesLeft: retries });
-    if (err.message?.includes("Requested entity was not found.")) {
-      if (typeof window !== 'undefined' && (window as any).aistudio) {
-        await (window as any).aistudio.openSelectKey();
-      }
+    if (typeof (window as any).grecaptcha !== 'undefined') {
+      const token = await (window as any).grecaptcha.execute(
+        (window as any).__RECAPTCHA_SITE_KEY__ || '',
+        { action: 'scan' }
+      );
+      return token;
     }
-    if (retries <= 0) throw err;
-    await new Promise(resolve => setTimeout(resolve, delay));
-    return retry(fn, retries - 1, delay * 2);
+  } catch (err) {
+    cloudLogger.log('WARNING', 'reCAPTCHA token acquisition failed', { error: (err as Error).message });
   }
-}
-
-export async function analyzeImage(base64Image: string): Promise<Partial<Monster>> {
-  return retry(async () => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const startTime = Date.now();
-    
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
-          { text: "Identify the object and evolve it into a futuristic creature. Return JSON." }
-        ]
-      },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: MONSTER_SCHEMA,
-      }
-    });
-
-    cloudLogger.log('INFO', 'Inference Complete', { 
-      latencyMs: Date.now() - startTime,
-      model: 'gemini-3-flash-preview'
-    });
-
-    if (!response.text) throw new Error("AI returned empty analysis.");
-    return JSON.parse(response.text.trim());
-  });
+  return '';
 }
 
 /**
- * Imagen 4.0 Integration via generateImages
- * Used for high-fidelity 'Evolution' assets as requested.
+ * Get or create a persistent session ID
+ */
+function getSessionId(): string {
+  let sessionId = localStorage.getItem('lexicon_session_id');
+  if (!sessionId) {
+    sessionId = crypto.randomUUID();
+    localStorage.setItem('lexicon_session_id', sessionId);
+  }
+  return sessionId;
+}
+
+/**
+ * Full scan pipeline — sends image to server for Vertex AI processing
+ * Server handles: GCS upload → Gemini analysis → Imagen generation → Firestore save
+ */
+export async function analyzeImage(base64Image: string): Promise<Partial<Monster>> {
+  const startTime = Date.now();
+  const recaptchaToken = await getRecaptchaToken();
+  const sessionId = getSessionId();
+
+  const response = await fetch(`${API_BASE}/api/scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      image: base64Image,
+      recaptchaToken,
+      sessionId,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: 'Scan failed' }));
+    throw new Error(err.error || `Scan failed with status ${response.status}`);
+  }
+
+  const data = await response.json();
+  cloudLogger.log('INFO', 'Scan pipeline complete via server', {
+    latencyMs: Date.now() - startTime,
+    cached: data.cached,
+    name: data.monster?.name,
+  });
+
+  return data.monster;
+}
+
+/**
+ * Generate monster visual — now handled server-side in scan pipeline
+ * This function returns the imageUrl from the scan result
  */
 export async function generateMonsterVisual(monster: Partial<Monster>): Promise<string> {
-  return retry(async () => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const prompt = `Hyper-realistic 3D character render of ${monster.name}, a futuristic monster evolved from a ${monster.originalObject}. Style: Unreal Engine 5, cinematic lighting, neon details, 4k.`;
-    
-    cloudLogger.log('INFO', 'Generating high-fidelity visual with Imagen 4.0');
-    
-    const response = await ai.models.generateImages({
-      model: 'imagen-4.0-generate-001',
-      prompt: prompt,
-      config: {
-        numberOfImages: 1,
-        outputMimeType: 'image/jpeg',
-        aspectRatio: '1:1',
-      },
-    });
-
-    const base64Data = response.generatedImages[0].image.imageBytes;
-    if (base64Data) return `data:image/jpeg;base64,${base64Data}`;
-    throw new Error("Imagen 4.0 generation failed.");
-  });
+  // Visual generation now happens server-side as part of the scan pipeline
+  // The scan endpoint returns the complete monster with imageUrl
+  return monster.imageUrl || '';
 }
 
 function decode(base64: string): Uint8Array {
@@ -153,24 +139,59 @@ async function decodeAudioData(data: Uint8Array, ctx: AudioContext, sampleRate: 
   return buffer;
 }
 
+/**
+ * TTS via server-side Vertex AI
+ */
 export async function getLoreAudio(text: string, audioCtx: AudioContext): Promise<AudioBuffer | null> {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: `Neural Scan Report: ${text}` }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
-      },
+    const response = await fetch(`${API_BASE}/api/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
     });
 
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (base64Audio) {
-      return await decodeAudioData(decode(base64Audio), audioCtx, 24000, 1);
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    if (data.audio) {
+      return await decodeAudioData(decode(data.audio), audioCtx, 24000, 1);
     }
   } catch (err) {
-    cloudLogger.log('ERROR', 'TTS Synthesis Failure', { error: err });
+    cloudLogger.log('ERROR', 'TTS request failed', { error: err });
   }
   return null;
 }
+
+/**
+ * Fetch collection from Firestore via server
+ */
+export async function fetchCollection(): Promise<Monster[]> {
+  try {
+    const sessionId = getSessionId();
+    const response = await fetch(`${API_BASE}/api/collection/${sessionId}`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.monsters || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Track analytics events via Firebase Analytics (gtag)
+ */
+export function trackEvent(eventName: string, params: Record<string, any> = {}) {
+  try {
+    if (typeof (window as any).gtag === 'function') {
+      (window as any).gtag('event', eventName, {
+        ...params,
+        app_name: 'living-lexicon',
+        app_version: '2.0.0',
+      });
+    }
+  } catch {
+    // Silent fail for analytics
+  }
+}
+
+export { getSessionId };

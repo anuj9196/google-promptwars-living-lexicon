@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AppStatus, Monster } from './types';
-import { analyzeImage, generateMonsterVisual, getLoreAudio, cloudLogger, storageService } from './services/geminiService';
+import { analyzeImage, generateMonsterVisual, getLoreAudio, cloudLogger, storageService, fetchCollection, trackEvent, getSessionId } from './services/geminiService';
 import MonsterCard from './components/MonsterCard';
 import MonsterModal from './components/MonsterModal';
 import ScannerOverlay from './components/ScannerOverlay';
@@ -17,39 +17,52 @@ const App: React.FC = () => {
   const [isFixating, setIsFixating] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [telemetryTime, setTelemetryTime] = useState(Date.now());
-  
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  const ensureApiKey = async () => {
-    if (typeof window !== 'undefined' && (window as any).aistudio) {
-      const hasKey = await (window as any).aistudio.hasSelectedApiKey();
-      if (!hasKey) await (window as any).aistudio.openSelectKey();
-    }
-    return true;
-  };
-
   const initAudio = useCallback(() => {
     if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
     if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
   }, []);
 
+  // Load collection from Firestore on mount, with localStorage fallback
   useEffect(() => {
-    const saved = localStorage.getItem('cyberdex_collection');
-    if (saved) try { setCollection(JSON.parse(saved)); } catch (e) { console.error(e); }
+    const loadCollection = async () => {
+      try {
+        const serverCollection = await fetchCollection();
+        if (serverCollection.length > 0) {
+          setCollection(serverCollection);
+          localStorage.setItem('cyberdex_collection', JSON.stringify(serverCollection));
+        } else {
+          // Fallback to localStorage
+          const saved = localStorage.getItem('cyberdex_collection');
+          if (saved) try { setCollection(JSON.parse(saved)); } catch (e) { console.error(e); }
+        }
+      } catch {
+        // Fallback to localStorage on fetch failure
+        const saved = localStorage.getItem('cyberdex_collection');
+        if (saved) try { setCollection(JSON.parse(saved)); } catch (e) { console.error(e); }
+      }
+    };
+    loadCollection();
 
     const hasSeenTutorial = localStorage.getItem('has_seen_tutorial');
     if (!hasSeenTutorial) {
       setShowTutorial(true);
     }
 
+    // Track page view via Firebase Analytics
+    trackEvent('page_view', { page_title: 'Living Lexicon' });
+
     const tInterval = setInterval(() => setTelemetryTime(Date.now()), 2000);
     return () => clearInterval(tInterval);
   }, []);
 
+  // Sync collection to localStorage as backup
   useEffect(() => {
     localStorage.setItem('cyberdex_collection', JSON.stringify(collection));
   }, [collection]);
@@ -58,6 +71,7 @@ const App: React.FC = () => {
     setShowTutorial(false);
     localStorage.setItem('has_seen_tutorial', 'true');
     initAudio();
+    trackEvent('tutorial_dismissed');
   };
 
   useEffect(() => {
@@ -66,8 +80,8 @@ const App: React.FC = () => {
       if (!streamRef.current) {
         const initCamera = async () => {
           try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-              video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } 
+            const stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
             });
             streamRef.current = stream;
             if (videoRef.current) videoRef.current.srcObject = stream;
@@ -123,28 +137,31 @@ const App: React.FC = () => {
 
   const processImage = async (base64: string) => {
     try {
-      await ensureApiKey();
       setStatus(AppStatus.STAGING_TO_GCS);
       await storageService.uploadToStaging(base64, `scan_${Date.now()}`);
 
       setStatus(AppStatus.EVOLVING);
+      // Server-side pipeline: GCS upload → Gemini → Imagen → Firestore
+      // analyzeImage now calls /api/scan which returns the complete monster
       const monsterData = await analyzeImage(base64);
-      
-      const existing = collection.find(m => 
-        m.name.toLowerCase() === monsterData.name?.toLowerCase() || 
+
+      const existing = collection.find(m =>
+        m.name.toLowerCase() === monsterData.name?.toLowerCase() ||
         m.originalObject.toLowerCase() === monsterData.originalObject?.toLowerCase()
       );
 
       if (existing) {
         displayDetection(existing);
+        trackEvent('monster_duplicate_detected', { name: existing.name });
         return;
       }
 
+      // Server already generated the visual and returned imageUrl
       setStatus(AppStatus.GENERATING_VISUAL);
-      const imageUrl = await generateMonsterVisual(monsterData);
+      const imageUrl = monsterData.imageUrl || await generateMonsterVisual(monsterData);
 
       const fullMonster: Monster = {
-        id: crypto.randomUUID(),
+        id: monsterData.id || crypto.randomUUID(),
         name: monsterData.name || "Unknown Entity",
         originalObject: monsterData.originalObject || "Unknown Matter",
         types: monsterData.types || ["Unknown"],
@@ -156,12 +173,18 @@ const App: React.FC = () => {
 
       setStatus(AppStatus.LOGGING_METRICS);
       cloudLogger.log('INFO', 'New Monster Cataloged', { monsterId: fullMonster.id, name: fullMonster.name });
+      trackEvent('monster_scanned', {
+        name: fullMonster.name,
+        originalObject: fullMonster.originalObject,
+        types: fullMonster.types.join(','),
+      });
       await new Promise(r => setTimeout(r, 600));
 
       setCollection(prev => [fullMonster, ...prev]);
       displayDetection(fullMonster);
     } catch (err: any) {
       cloudLogger.log('ERROR', 'Processing Pipeline Failure', { error: err.message });
+      trackEvent('scan_error', { error: err.message });
       setErrorMessage(`SYSTEM FAILURE: ${err.message || 'Signal lost'}`);
       setStatus(AppStatus.AR_MODE);
     }
@@ -171,6 +194,7 @@ const App: React.FC = () => {
     setCurrentDetection(monster);
     setStatus(AppStatus.AR_MODE);
     initAudio();
+    trackEvent('monster_viewed', { name: monster.name });
     if (audioCtxRef.current) {
       const audioBuffer = await getLoreAudio(`${monster.name}. ${monster.lore}`, audioCtxRef.current);
       if (audioBuffer) {
@@ -192,21 +216,34 @@ const App: React.FC = () => {
 
   return (
     <div className="relative min-h-screen w-screen bg-[#05070a] text-white overflow-x-hidden flex flex-col font-inter select-none">
-      
+
       {showTutorial && <TutorialOverlay onDismiss={dismissTutorial} />}
 
       {/* ERROR HUD */}
       {errorMessage && (
-        <div role="alert" className="fixed top-24 left-1/2 -translate-x-1/2 z-[300] w-[90%] max-w-xl animate-in slide-in-from-top-4 duration-500">
+        <div role="alert" aria-live="assertive" className="fixed top-24 left-1/2 -translate-x-1/2 z-[300] w-[90%] max-w-xl animate-in slide-in-from-top-4 duration-500">
           <div className="bg-red-950/80 backdrop-blur-2xl border border-red-500/50 p-4 rounded-xl flex items-center justify-between shadow-2xl">
             <span className="font-orbitron text-[10px] tracking-widest text-red-100 uppercase">{errorMessage}</span>
-            <button onClick={() => setErrorMessage(null)} className="p-2 text-red-400 hover:text-white"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
+            <button onClick={() => setErrorMessage(null)} aria-label="Dismiss error" className="p-2 text-red-400 hover:text-white"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
           </div>
         </div>
       )}
 
+      {/* SKIP TO CONTENT LINK (A11y) */}
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[400] focus:bg-cyan-600 focus:px-4 focus:py-2 focus:rounded-lg focus:text-white focus:font-bold">
+        Skip to main content
+      </a>
+
+      {/* STATUS ANNOUNCER (A11y) */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {status === AppStatus.STAGING_TO_GCS && 'Staging scan data to cloud storage'}
+        {status === AppStatus.EVOLVING && 'Analyzing object with Vertex AI'}
+        {status === AppStatus.GENERATING_VISUAL && 'Generating creature visual with Imagen'}
+        {status === AppStatus.LOGGING_METRICS && 'Finalizing metrics and saving to database'}
+      </div>
+
       {/* PHOTONIC BACKGROUND & VIEWPORT */}
-      <div 
+      <div
         onPointerDown={() => status === AppStatus.AR_MODE && setIsFixating(true)}
         onPointerUp={() => setIsFixating(false)}
         className={`fixed inset-0 z-0 transition-opacity duration-1000 ${[AppStatus.AR_MODE, AppStatus.STAGING_TO_GCS, AppStatus.EVOLVING, AppStatus.GENERATING_VISUAL, AppStatus.LOGGING_METRICS].includes(status) || currentDetection ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
@@ -217,47 +254,48 @@ const App: React.FC = () => {
       </div>
 
       {/* NEURAL INTERFACE LAYER */}
-      <div className="relative z-10 flex-1 flex flex-col pointer-events-auto">
+      <div id="main-content" className="relative z-10 flex-1 flex flex-col pointer-events-auto">
         <header className="p-6 md:p-8 flex justify-between items-start">
           <div className="bg-black/60 backdrop-blur-xl border border-cyan-500/30 p-4 rounded-xl flex items-center gap-4">
             <div className="w-10 h-10 rounded-lg bg-cyan-500/10 border border-cyan-500/40 flex items-center justify-center">
-               <svg className="w-6 h-6 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2L12 22M2 12L22 12M12 2L19 9M12 22L5 15M2 12L9 5M22 12L15 19"/></svg>
+              <svg className="w-6 h-6 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2L12 22M2 12L22 12M12 2L19 9M12 22L5 15M2 12L9 5M22 12L15 19" /></svg>
             </div>
             <div className="flex flex-col">
               <h1 className="text-2xl font-orbitron font-bold neon-text-cyan tracking-widest leading-none">LEXICON <span className="text-magenta-500">2026</span></h1>
               <p className="text-[9px] font-mono text-cyan-400/60 tracking-[0.2em] mt-1.5 uppercase">Vertex Managed AI Service</p>
             </div>
           </div>
-          
+
           {status !== AppStatus.IDLE && (
             <button onClick={() => { setStatus(AppStatus.IDLE); clearTarget(); }} className="bg-red-900/50 border border-red-500/40 px-6 py-3 rounded-xl font-orbitron text-[10px] tracking-widest text-white uppercase shadow-lg hover:bg-red-800 transition-colors">Exit Interface</button>
           )}
         </header>
 
         {status === AppStatus.IDLE && !currentDetection && !activeMonster && (
-          <main className="flex-1 flex flex-col items-center p-6 animate-in fade-in duration-1000">
+          <main className="flex-1 flex flex-col items-center p-6 animate-in fade-in duration-1000" role="main" aria-label="Living Lexicon main interface">
             <div className="max-w-7xl w-full grid lg:grid-cols-[1fr_350px] gap-12 items-start">
-              
+
               {/* Center Action Zone */}
               <div className="flex flex-col items-center justify-center py-12 lg:py-24">
                 <div className="relative group mb-16">
-                   {/* Background Glow */}
-                   <div className="absolute -inset-24 bg-cyan-500/5 rounded-full blur-[100px] group-hover:bg-cyan-500/15 transition-all duration-1000"></div>
-                   
-                   <button 
-                    onClick={() => { ensureApiKey(); setStatus(AppStatus.AR_MODE); }} 
+                  {/* Background Glow */}
+                  <div className="absolute -inset-24 bg-cyan-500/5 rounded-full blur-[100px] group-hover:bg-cyan-500/15 transition-all duration-1000"></div>
+
+                  <button
+                    onClick={() => { setStatus(AppStatus.AR_MODE); trackEvent('scanner_initialized'); }}
+                    aria-label="Initialize AR scanner to capture and evolve creatures"
                     className="relative z-20 w-80 h-80 rounded-full bg-black/40 backdrop-blur-3xl border-2 border-cyan-500/20 flex flex-col items-center justify-center hover:border-cyan-400 hover:scale-105 transition-all shadow-[0_0_100px_rgba(0,242,255,0.1)] overflow-hidden group"
-                   >
+                  >
                     {/* Animated Photonic Iris */}
                     <svg className="absolute inset-0 w-full h-full p-4 pointer-events-none" viewBox="0 0 200 200">
-                       <circle cx="100" cy="100" r="90" fill="none" stroke="currentColor" strokeWidth="0.5" className="text-cyan-500/10" />
-                       <g className="animate-[spin_20s_linear_infinite]">
-                         <path d="M100 20 A 80 80 0 0 1 180 100" fill="none" stroke="currentColor" strokeWidth="1" className="text-cyan-400/40" />
-                         <path d="M100 180 A 80 80 0 0 1 20 100" fill="none" stroke="currentColor" strokeWidth="1" className="text-magenta-400/40" />
-                       </g>
-                       <g className="animate-[spin_15s_linear_infinite_reverse]">
-                         <path d="M100 40 A 60 60 0 0 1 160 100" fill="none" stroke="currentColor" strokeWidth="3" strokeDasharray="10 5" className="text-cyan-500/20" />
-                       </g>
+                      <circle cx="100" cy="100" r="90" fill="none" stroke="currentColor" strokeWidth="0.5" className="text-cyan-500/10" />
+                      <g className="animate-[spin_20s_linear_infinite]">
+                        <path d="M100 20 A 80 80 0 0 1 180 100" fill="none" stroke="currentColor" strokeWidth="1" className="text-cyan-400/40" />
+                        <path d="M100 180 A 80 80 0 0 1 20 100" fill="none" stroke="currentColor" strokeWidth="1" className="text-magenta-400/40" />
+                      </g>
+                      <g className="animate-[spin_15s_linear_infinite_reverse]">
+                        <path d="M100 40 A 60 60 0 0 1 160 100" fill="none" stroke="currentColor" strokeWidth="3" strokeDasharray="10 5" className="text-cyan-500/20" />
+                      </g>
                     </svg>
 
                     <div className="relative z-30 flex flex-col items-center gap-6">
@@ -275,7 +313,7 @@ const App: React.FC = () => {
                   </button>
                 </div>
 
-                <section className="w-full">
+                <section className="w-full" aria-label="Monster collection archive">
                   <div className="flex items-center justify-between mb-10 border-b border-white/10 pb-6">
                     <h2 className="text-2xl font-orbitron font-bold neon-text-cyan flex items-center gap-5">
                       <div className="w-2 h-2 bg-cyan-500 rounded-full shadow-[0_0_10px_#00f2ff] animate-pulse"></div>
@@ -287,7 +325,7 @@ const App: React.FC = () => {
                     </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
-                    {collection.map(monster => ( monster.id && <MonsterCard key={monster.id} monster={monster} onClick={() => setActiveMonster(monster)} /> ))}
+                    {collection.map(monster => (monster.id && <MonsterCard key={monster.id} monster={monster} onClick={() => setActiveMonster(monster)} />))}
                     {collection.length === 0 && (
                       <div className="col-span-full py-32 border border-dashed border-white/5 rounded-[3rem] flex flex-col items-center justify-center opacity-30">
                         <svg className="w-16 h-16 text-white mb-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
@@ -299,7 +337,7 @@ const App: React.FC = () => {
               </div>
 
               {/* Sidebar Telemetry */}
-              <aside className="hidden lg:flex flex-col gap-8 sticky top-12">
+              <aside className="hidden lg:flex flex-col gap-8 sticky top-12" aria-label="System telemetry">
                 <div className="p-8 bg-black/50 border border-cyan-500/10 rounded-[2.5rem] space-y-8 backdrop-blur-3xl shadow-2xl">
                   <header className="flex justify-between items-center">
                     <h3 className="font-orbitron text-[11px] font-bold text-magenta-500 tracking-[0.5em] uppercase">Telemetry</h3>
@@ -308,7 +346,7 @@ const App: React.FC = () => {
                       <div className="w-1 h-3 bg-cyan-500/20"></div>
                     </div>
                   </header>
-                  
+
                   <div className="space-y-6">
                     <TelemetryItem label="GCS Sync Buffer" value="98.2%" status="Optimal" color="cyan" />
                     <TelemetryItem label="Vertex AI Latency" value={`${(Math.random() * 50 + 100).toFixed(0)}ms`} status="Fast" color="cyan" />
@@ -317,27 +355,27 @@ const App: React.FC = () => {
 
                   <div className="pt-8 border-t border-white/5 space-y-3">
                     <div className="flex justify-between items-center">
-                       <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">Archive_Load</span>
-                       <span className="text-[10px] font-mono text-cyan-400">0.02 TB / 1.0 PT</span>
+                      <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">Archive_Load</span>
+                      <span className="text-[10px] font-mono text-cyan-400">0.02 TB / 1.0 PT</span>
                     </div>
                     <div className="h-1 bg-white/5 rounded-full overflow-hidden">
-                       <div className="h-full bg-gradient-to-r from-cyan-600 to-magenta-600 w-1/12 animate-pulse"></div>
+                      <div className="h-full bg-gradient-to-r from-cyan-600 to-magenta-600 w-1/12 animate-pulse"></div>
                     </div>
                     <div className="grid grid-cols-4 gap-1 pt-2">
-                       {[...Array(8)].map((_, i) => (
-                         <div key={i} className={`h-1 rounded-sm transition-colors duration-1000 ${telemetryTime % (i + 1) === 0 ? 'bg-cyan-500/40' : 'bg-white/5'}`}></div>
-                       ))}
+                      {[...Array(8)].map((_, i) => (
+                        <div key={i} className={`h-1 rounded-sm transition-colors duration-1000 ${telemetryTime % (i + 1) === 0 ? 'bg-cyan-500/40' : 'bg-white/5'}`}></div>
+                      ))}
                     </div>
                   </div>
                 </div>
 
                 <div className="p-6 bg-magenta-500/5 border border-magenta-500/20 rounded-3xl relative overflow-hidden group">
-                   <div className="absolute top-0 right-0 p-2 opacity-30 group-hover:opacity-100 transition-opacity">
-                      <svg className="w-4 h-4 text-magenta-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                   </div>
-                   <p className="text-[10px] text-magenta-400/80 leading-relaxed font-mono tracking-tight">
-                     <span className="font-bold text-magenta-500">PROTOCOL NOTICE:</span> Neural evolution results are permanent. GCS staging is encrypted via Cloud KMS.
-                   </p>
+                  <div className="absolute top-0 right-0 p-2 opacity-30 group-hover:opacity-100 transition-opacity">
+                    <svg className="w-4 h-4 text-magenta-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  </div>
+                  <p className="text-[10px] text-magenta-400/80 leading-relaxed font-mono tracking-tight">
+                    <span className="font-bold text-magenta-500">PROTOCOL NOTICE:</span> Neural evolution results are permanent. GCS staging is encrypted via Cloud KMS.
+                  </p>
                 </div>
               </aside>
 
@@ -347,10 +385,10 @@ const App: React.FC = () => {
 
         {currentDetection && (
           <div className="fixed bottom-12 left-1/2 -translate-x-1/2 w-[92%] max-w-md animate-in slide-in-from-bottom-12 duration-700">
-            <div onClick={() => setActiveMonster(currentDetection)} className="bg-black/70 backdrop-blur-3xl border-2 border-cyan-500/50 rounded-3xl p-6 flex items-center gap-6 cursor-pointer hover:border-white hover:shadow-[0_0_50px_rgba(0,242,255,0.2)] transition-all">
+            <div onClick={() => setActiveMonster(currentDetection)} className="bg-black/70 backdrop-blur-3xl border-2 border-cyan-500/50 rounded-3xl p-6 flex items-center gap-6 cursor-pointer hover:border-white hover:shadow-[0_0_50px_rgba(0,242,255,0.2)] transition-all" role="button" tabIndex={0} aria-label={`View details for ${currentDetection.name}`} onKeyDown={(e) => e.key === 'Enter' && setActiveMonster(currentDetection)}>
               <div className="relative">
                 <div className="absolute -inset-1 bg-cyan-500/20 rounded-2xl animate-pulse"></div>
-                <img src={currentDetection.imageUrl} className="w-24 h-24 rounded-2xl object-cover relative z-10" alt="" />
+                <img src={currentDetection.imageUrl} className="w-24 h-24 rounded-2xl object-cover relative z-10" alt={`${currentDetection.name} creature`} />
               </div>
               <div className="flex-1">
                 <span className="text-[9px] font-mono text-cyan-500/60 uppercase tracking-[0.3em]">New Detection</span>
@@ -366,41 +404,41 @@ const App: React.FC = () => {
 
       {/* PIPELINE PROGRESS HUD */}
       {[AppStatus.STAGING_TO_GCS, AppStatus.EVOLVING, AppStatus.GENERATING_VISUAL, AppStatus.LOGGING_METRICS].includes(status) && (
-        <div className="fixed inset-0 z-[200] bg-[#05070a]/95 backdrop-blur-2xl flex flex-col items-center justify-center p-8 text-center">
+        <div className="fixed inset-0 z-[200] bg-[#05070a]/95 backdrop-blur-2xl flex flex-col items-center justify-center p-8 text-center" role="progressbar" aria-label="Processing scan" aria-valuetext={`${status === AppStatus.STAGING_TO_GCS ? 'Staging' : status === AppStatus.EVOLVING ? 'Analyzing' : status === AppStatus.GENERATING_VISUAL ? 'Generating' : 'Finalizing'}`}>
           <div className="relative w-64 h-64 mb-16">
-             <div className="absolute inset-0 border-[8px] border-cyan-500/5 rounded-full"></div>
-             <div className="absolute inset-0 border-t-[8px] border-cyan-400 rounded-full animate-spin shadow-[0_0_40px_rgba(0,242,255,0.4)]"></div>
-             <div className="absolute inset-12 border border-magenta-500/20 rounded-full animate-[spin_4s_linear_infinite_reverse]"></div>
-             <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-4 h-4 bg-cyan-400 rounded-full animate-ping"></div>
-             </div>
+            <div className="absolute inset-0 border-[8px] border-cyan-500/5 rounded-full"></div>
+            <div className="absolute inset-0 border-t-[8px] border-cyan-400 rounded-full animate-spin shadow-[0_0_40px_rgba(0,242,255,0.4)]"></div>
+            <div className="absolute inset-12 border border-magenta-500/20 rounded-full animate-[spin_4s_linear_infinite_reverse]"></div>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-4 h-4 bg-cyan-400 rounded-full animate-ping"></div>
+            </div>
           </div>
           <div className="space-y-6 max-w-md">
             <h2 className="font-orbitron text-3xl font-black neon-text-cyan tracking-widest uppercase animate-pulse italic">
               {status === AppStatus.STAGING_TO_GCS && 'Staging to GCS'}
               {status === AppStatus.EVOLVING && 'Neural Evolution'}
-              {status === AppStatus.GENERATING_VISUAL && 'Imagen 4.0 Synthesis'}
+              {status === AppStatus.GENERATING_VISUAL && 'Imagen Synthesis'}
               {status === AppStatus.LOGGING_METRICS && 'Finalizing Metrics'}
             </h2>
             <p className="text-slate-500 text-xs font-mono uppercase tracking-[0.2em]">
-               {status === AppStatus.STAGING_TO_GCS && 'Ingesting photonic raw data into lexicon-raw-ingest...'}
-               {status === AppStatus.EVOLVING && 'Analyzing entropy signatures via Gemini 3 Flash...'}
-               {status === AppStatus.GENERATING_VISUAL && 'Synthesizing higher lifeform visuals via Vertex AI...'}
-               {status === AppStatus.LOGGING_METRICS && 'Submitting structured audit logs to Cloud Logging...'}
+              {status === AppStatus.STAGING_TO_GCS && 'Ingesting photonic raw data into lexicon-raw-ingest...'}
+              {status === AppStatus.EVOLVING && 'Analyzing entropy signatures via Gemini on Vertex AI...'}
+              {status === AppStatus.GENERATING_VISUAL && 'Synthesizing higher lifeform visuals via Vertex AI Imagen...'}
+              {status === AppStatus.LOGGING_METRICS && 'Submitting structured audit logs to Cloud Logging...'}
             </p>
             <div className="flex flex-col gap-2 items-center font-mono text-[10px] text-cyan-500/40 tracking-[0.4em] pt-8">
-               <span className="flex items-center gap-3">
-                 <div className={`w-2 h-2 rounded-full ${status !== AppStatus.STAGING_TO_GCS ? 'bg-cyan-500 shadow-[0_0_10px_#00f2ff]' : 'bg-white/10 animate-pulse'}`}></div>
-                 Bucket: [lexicon-raw-ingest]
-               </span>
-               <span className="flex items-center gap-3">
-                 <div className={`w-2 h-2 rounded-full ${[AppStatus.GENERATING_VISUAL, AppStatus.LOGGING_METRICS].includes(status) ? 'bg-cyan-500 shadow-[0_0_10px_#00f2ff]' : 'bg-white/10'}`}></div>
-                 Model: [vertex.imagen-4]
-               </span>
-               <span className="flex items-center gap-3">
-                 <div className={`w-2 h-2 rounded-full ${status === AppStatus.LOGGING_METRICS ? 'bg-cyan-500 shadow-[0_0_10px_#00f2ff]' : 'bg-white/10'}`}></div>
-                 Sink: [logging-sink-v2]
-               </span>
+              <span className="flex items-center gap-3">
+                <div className={`w-2 h-2 rounded-full ${status !== AppStatus.STAGING_TO_GCS ? 'bg-cyan-500 shadow-[0_0_10px_#00f2ff]' : 'bg-white/10 animate-pulse'}`}></div>
+                Bucket: [lexicon-raw-ingest]
+              </span>
+              <span className="flex items-center gap-3">
+                <div className={`w-2 h-2 rounded-full ${[AppStatus.GENERATING_VISUAL, AppStatus.LOGGING_METRICS].includes(status) ? 'bg-cyan-500 shadow-[0_0_10px_#00f2ff]' : 'bg-white/10'}`}></div>
+                Model: [vertex.imagen]
+              </span>
+              <span className="flex items-center gap-3">
+                <div className={`w-2 h-2 rounded-full ${status === AppStatus.LOGGING_METRICS ? 'bg-cyan-500 shadow-[0_0_10px_#00f2ff]' : 'bg-white/10'}`}></div>
+                Sink: [cloud-logging-v2]
+              </span>
             </div>
           </div>
         </div>
