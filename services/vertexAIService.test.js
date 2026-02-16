@@ -83,8 +83,8 @@ describe('vertexAIService', () => {
     describe('_internals', () => {
         it('exports expected constants', async () => {
             const { _internals } = await import('./vertexAIService');
-            expect(_internals.GEMINI_MODEL).toBe('gemini-2.0-flash');
-            expect(_internals.IMAGEN_MODEL).toBe('imagen-3.0-generate-001');
+            expect(_internals.GEMINI_MODEL).toBe('gemini-1.5-flash-001');
+            expect(_internals.IMAGEN_MODEL).toBe('imagegeneration@006');
             expect(_internals.MONSTER_SCHEMA).toBeDefined();
             expect(_internals.MONSTER_SCHEMA.required).toContain('name');
         });
