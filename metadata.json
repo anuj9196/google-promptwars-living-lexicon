@@ -1,0 +1,7 @@
+{
+  "name": "Living Lexicon: Cyber-Dex 2026",
+  "description": "A futuristic creature-cataloging app that uses AI to evolve real-world objects into digital monsters.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
