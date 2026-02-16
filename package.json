@@ -1,0 +1,13 @@
+{
+  "name": "living-lexicon-2026",
+  "version": "1.0.0",
+  "description": "Cyber-Dex 2026 Deployment with Runtime Transpilation",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "esbuild": "^0.25.0"
+  }
+}
