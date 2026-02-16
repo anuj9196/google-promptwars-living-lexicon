@@ -15,20 +15,20 @@ const MonsterModal: React.FC<MonsterModalProps> = ({ monster, onClose }) => {
   }, []);
 
   return (
-    <div 
+    <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-title"
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-lg animate-in fade-in duration-300"
       onClick={onClose}
     >
-      <div 
+      <div
         className="relative w-full max-w-5xl max-h-[92vh] overflow-y-auto bg-[#0a0f18]/90 border border-cyan-500/30 rounded-[2.5rem] shadow-[0_0_100px_rgba(0,242,255,0.2)] flex flex-col lg:flex-row pointer-events-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        
+
         {/* Navigation Control */}
-        <button 
+        <button
           onClick={onClose}
           aria-label="Close Neural Log"
           className="absolute top-6 right-6 z-[110] w-12 h-12 rounded-full bg-black/60 border border-white/20 flex items-center justify-center text-white hover:bg-red-600/50 hover:border-red-500/50 transition-all shadow-xl group focus:ring-2 focus:ring-red-400 outline-none"
@@ -44,10 +44,11 @@ const MonsterModal: React.FC<MonsterModalProps> = ({ monster, onClose }) => {
           <div className="relative w-full max-w-md aspect-square group">
             <div className="absolute -inset-6 border border-cyan-500/10 rounded-full animate-pulse"></div>
             <div className="absolute -inset-1 border border-cyan-500/30 rounded-3xl group-hover:border-cyan-400 transition-colors"></div>
-            <img 
-              src={monster.imageUrl} 
-              alt={monster.name} 
+            <img
+              src={monster.imageUrl}
+              alt={monster.name}
               className="w-full h-full object-cover rounded-2xl shadow-2xl relative z-10 brightness-110 group-hover:scale-[1.03] transition-transform duration-1000"
+              onError={(e) => { e.currentTarget.src = 'https://placehold.co/800x800/0f172a/00f2ff?text=SIGNAL+LOST'; }}
             />
             <div className="absolute -bottom-8 -left-8 px-6 py-3 bg-black/95 backdrop-blur-2xl border border-magenta-500/50 rounded-2xl z-20 shadow-2xl">
               <span className="text-[10px] font-orbitron text-magenta-400 block opacity-60 uppercase tracking-[0.3em] mb-1 leading-none">Scanning Source</span>
@@ -92,8 +93,8 @@ const MonsterModal: React.FC<MonsterModalProps> = ({ monster, onClose }) => {
                     <span className="font-mono text-[10px] text-cyan-400 font-bold">PWR {move.power}</span>
                   </div>
                   <div className="h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
-                    <div 
-                      className="h-full bg-gradient-to-r from-cyan-600 to-cyan-400 shadow-[0_0_10px_rgba(0,242,255,0.4)] transition-all duration-1000" 
+                    <div
+                      className="h-full bg-gradient-to-r from-cyan-600 to-cyan-400 shadow-[0_0_10px_rgba(0,242,255,0.4)] transition-all duration-1000"
                       style={{ width: `${move.power}%` }}
                     ></div>
                   </div>

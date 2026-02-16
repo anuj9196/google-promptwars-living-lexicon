@@ -9,7 +9,7 @@ interface MonsterCardProps {
 
 const MonsterCard: React.FC<MonsterCardProps> = ({ monster, onClick }) => {
   return (
-    <div 
+    <div
       onClick={onClick}
       onKeyDown={(e) => e.key === 'Enter' && onClick()}
       tabIndex={0}
@@ -19,19 +19,20 @@ const MonsterCard: React.FC<MonsterCardProps> = ({ monster, onClick }) => {
     >
       {/* Visual Header */}
       <div className="aspect-square relative overflow-hidden bg-slate-950">
-        <img 
-          src={monster.imageUrl} 
-          alt={monster.name} 
+        <img
+          src={monster.imageUrl}
+          alt={monster.name}
           loading="lazy"
           className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-110 opacity-90 group-hover:opacity-100 brightness-110"
+          onError={(e) => { e.currentTarget.src = 'https://placehold.co/400x400/0f172a/00f2ff?text=SIGNAL+LOST'; }}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-40 group-hover:opacity-100 transition-opacity"></div>
-        
+
         {/* Type Badges */}
         <div className="absolute top-3 right-3 flex flex-col gap-1.5 z-10">
           {monster.types.map(type => (
-            <span 
-              key={type} 
+            <span
+              key={type}
               className="text-[9px] font-orbitron font-bold px-2.5 py-1 rounded-md bg-black/70 backdrop-blur-md border border-cyan-500/40 text-cyan-300 uppercase tracking-widest shadow-lg"
             >
               {type}

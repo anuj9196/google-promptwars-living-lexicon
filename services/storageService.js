@@ -71,16 +71,23 @@ async function uploadMonsterImage(base64Image, monsterId) {
     const objectName = `monsters/${monsterId}.jpg`;
     const gcsUri = await uploadBase64(ASSETS_BUCKET, objectName, base64Image);
 
-    // Generate signed URL valid for 7 days
-    const [signedUrl] = await getStorage()
-        .bucket(ASSETS_BUCKET)
-        .file(objectName)
-        .getSignedUrl({
-            action: 'read',
-            expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
-        });
+    // Generate signed URL (fallback to public URL if IAM signing fails)
+    let signedUrl;
+    try {
+        [signedUrl] = await getStorage()
+            .bucket(ASSETS_BUCKET)
+            .file(objectName)
+            .getSignedUrl({
+                action: 'read',
+                expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+            });
+    } catch (err) {
+        cloudLogger.log('WARNING', 'Failed to sign URL (IAM permissions issue) — falling back to public URL', { error: err.message });
+        // Fallback to public URL format (requires bucket to be public or fine-grained access)
+        signedUrl = `https://storage.googleapis.com/${ASSETS_BUCKET}/${objectName}`;
+    }
 
-    cloudLogger.log('INFO', 'Monster image uploaded with signed URL', {
+    cloudLogger.log('INFO', 'Monster image uploaded', {
         monsterId,
         bucket: ASSETS_BUCKET,
     });
