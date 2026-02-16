@@ -26,7 +26,7 @@ function getGenAI() {
 }
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
-const IMAGEN_MODEL = 'imagegeneration@006';
+const IMAGEN_MODEL = 'imagen-3.0-fast-generate-001';
 
 const MONSTER_SCHEMA = {
   type: 'OBJECT',
