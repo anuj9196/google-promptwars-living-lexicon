@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import { Monster } from "../types";
+import { Monster, Move } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -33,42 +33,60 @@ const MONSTER_SCHEMA = {
   propertyOrdering: ["name", "originalObject", "types", "lore", "moves"]
 };
 
-export async function analyzeImage(base64Image: string): Promise<Partial<Monster>> {
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: {
-      parts: [
-        { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
-        { text: "Analyze this real-world object and 'evolve' it into a futuristic fictional monster (like a Pokemon from 2026). Be creative and return JSON." }
-      ]
-    },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: MONSTER_SCHEMA,
-    }
-  });
+/**
+ * Exponential backoff utility for robust API calls
+ */
+async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (retries <= 0) throw err;
+    await new Promise(resolve => setTimeout(resolve, delay));
+    return retry(fn, retries - 1, delay * 2);
+  }
+}
 
-  if (!response.text) throw new Error("Failed to analyze object.");
-  return JSON.parse(response.text.trim());
+export async function analyzeImage(base64Image: string): Promise<Partial<Monster>> {
+  return retry(async () => {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: {
+        parts: [
+          { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
+          { text: "Analyze this real-world object and 'evolve' it into a futuristic fictional monster (like a Pokemon from 2026). Be creative and return JSON." }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: MONSTER_SCHEMA,
+      }
+    });
+
+    if (!response.text) throw new Error("AI returned empty analysis.");
+    return JSON.parse(response.text.trim());
+  });
 }
 
 export async function generateMonsterVisual(monster: Partial<Monster>): Promise<string> {
-  const prompt = `A high-quality 3D creature design of a monster named '${monster.name}', evolved from a ${monster.originalObject}. Style: Futuristic, neon-lit, digital art, cinematic atmosphere.`;
-  
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
-    contents: { parts: [{ text: prompt }] },
-    config: { imageConfig: { aspectRatio: "1:1" } }
-  });
+  return retry(async () => {
+    const prompt = `A high-quality 3D creature design of a monster named '${monster.name}', evolved from a ${monster.originalObject}. Style: Futuristic, neon-lit, digital art, cinematic atmosphere, 8k resolution.`;
+    
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: { parts: [{ text: prompt }] },
+      config: { imageConfig: { aspectRatio: "1:1" } }
+    });
 
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-  }
-  throw new Error("Visual generation failed.");
+    const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+    if (part?.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+    throw new Error("Visual generation failed - no image data returned.");
+  });
 }
 
-// Helper for PCM Decoding
-function decodeBase64(base64: string): Uint8Array {
+/**
+ * Manually implement base64 decoding as per SDK guidelines
+ */
+function decode(base64: string): Uint8Array {
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) {
@@ -77,34 +95,49 @@ function decodeBase64(base64: string): Uint8Array {
   return bytes;
 }
 
-async function decodeAudioData(data: Uint8Array, ctx: AudioContext): Promise<AudioBuffer> {
+/**
+ * Decodes raw PCM audio data (16-bit, mono, 24kHz) returned by Gemini TTS
+ */
+async function decodeAudioData(
+  data: Uint8Array,
+  ctx: AudioContext,
+  sampleRate: number,
+  numChannels: number,
+): Promise<AudioBuffer> {
   const dataInt16 = new Int16Array(data.buffer);
-  const buffer = ctx.createBuffer(1, dataInt16.length, 24000);
-  const channelData = buffer.getChannelData(0);
-  for (let i = 0; i < dataInt16.length; i++) {
-    channelData[i] = dataInt16[i] / 32768.0;
+  const frameCount = dataInt16.length / numChannels;
+  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+
+  for (let channel = 0; channel < numChannels; channel++) {
+    const channelData = buffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i++) {
+      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
+    }
   }
   return buffer;
 }
 
-export async function getLoreAudio(text: string): Promise<AudioBuffer | null> {
+export async function getLoreAudio(text: string, audioCtx: AudioContext): Promise<AudioBuffer | null> {
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: `System Announcement: ${text}` }] }],
+      contents: [{ parts: [{ text: `Neural Scan Report: ${text}` }] }],
       config: {
         responseModalities: [Modality.AUDIO],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+        speechConfig: { 
+          voiceConfig: { 
+            prebuiltVoiceConfig: { voiceName: 'Kore' } 
+          } 
+        },
       },
     });
 
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (base64Audio) {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-      return await decodeAudioData(decodeBase64(base64Audio), audioCtx);
+      return await decodeAudioData(decode(base64Audio), audioCtx, 24000, 1);
     }
   } catch (err) {
-    console.error("TTS Generation Error:", err);
+    console.error("TTS Protocol Error:", err);
   }
   return null;
 }

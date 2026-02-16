@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AppStatus, Monster } from './types';
 import { analyzeImage, generateMonsterVisual, getLoreAudio } from './services/geminiService';
 import MonsterCard from './components/MonsterCard';
@@ -19,28 +19,34 @@ const App: React.FC = () => {
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // Load collection from local storage
-  useEffect(() => {
-    const saved = localStorage.getItem('cyberdex_collection');
-    if (saved) {
-      try {
-        setCollection(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to load collection", e);
-      }
+  // Initialize Audio Context on user interaction to comply with browser policies
+  const initAudio = useCallback(() => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
     }
   }, []);
 
-  // Save collection to local storage
+  // Persistence: Load collection
+  useEffect(() => {
+    const saved = localStorage.getItem('cyberdex_collection');
+    if (saved) {
+      try { setCollection(JSON.parse(saved)); } catch (e) { console.error(e); }
+    }
+  }, []);
+
+  // Persistence: Save collection
   useEffect(() => {
     localStorage.setItem('cyberdex_collection', JSON.stringify(collection));
   }, [collection]);
 
-  // Camera stream management
+  // Optical Interface: Camera management
   useEffect(() => {
-    const isScanning = status === AppStatus.AR_MODE || currentDetection || status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL;
+    const isOpticalMode = status === AppStatus.AR_MODE || !!currentDetection || status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL;
     
-    if (isScanning) {
+    if (isOpticalMode) {
       if (!streamRef.current) {
         const initCamera = async () => {
           try {
@@ -50,7 +56,7 @@ const App: React.FC = () => {
             streamRef.current = stream;
             if (videoRef.current) videoRef.current.srcObject = stream;
           } catch (err) {
-            console.error("Camera access error:", err);
+            console.error("Optics Malfunction:", err);
             setStatus(AppStatus.IDLE);
           }
         };
@@ -66,7 +72,7 @@ const App: React.FC = () => {
 
   // 3-Second Auto-Scan Logic
   useEffect(() => {
-    let interval: number;
+    let interval: number | undefined;
     if (status === AppStatus.AR_MODE && !currentDetection && !activeMonster) {
       interval = window.setInterval(() => {
         setScanProgress(prev => {
@@ -75,7 +81,7 @@ const App: React.FC = () => {
             captureFrame();
             return 0;
           }
-          return prev + 2; // Increments roughly to 100 over 3 seconds (60ms * 50 = 3s)
+          return prev + 2.5; // ~2.4s for 100% at 60ms intervals
         });
       }, 60);
     } else {
@@ -84,12 +90,12 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [status, currentDetection, activeMonster]);
 
-  const stopAudio = () => {
+  const stopAudio = useCallback(() => {
     if (audioSourceRef.current) {
       try { audioSourceRef.current.stop(); } catch (e) {}
       audioSourceRef.current = null;
     }
-  };
+  }, []);
 
   const captureFrame = async () => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -110,7 +116,7 @@ const App: React.FC = () => {
       setStatus(AppStatus.EVOLVING);
       const monsterData = await analyzeImage(base64);
       
-      // Cache/Existing lookup
+      // Check cache for identical findings
       const existing = collection.find(m => 
         m.name.toLowerCase() === monsterData.name?.toLowerCase() || 
         m.originalObject.toLowerCase() === monsterData.originalObject?.toLowerCase()
@@ -126,10 +132,10 @@ const App: React.FC = () => {
 
       const fullMonster: Monster = {
         id: crypto.randomUUID(),
-        name: monsterData.name || "Unknown",
-        originalObject: monsterData.originalObject || "Unknown",
+        name: monsterData.name || "Unknown Entity",
+        originalObject: monsterData.originalObject || "Unknown Matter",
         types: monsterData.types || ["Unknown"],
-        lore: monsterData.lore || "",
+        lore: monsterData.lore || "No data recovered.",
         moves: monsterData.moves || [],
         imageUrl,
         capturedAt: Date.now()
@@ -138,7 +144,7 @@ const App: React.FC = () => {
       setCollection(prev => [fullMonster, ...prev]);
       displayDetection(fullMonster);
     } catch (err) {
-      console.error("AI Processing error:", err);
+      console.error("Neural Synthesis Failure:", err);
       setStatus(AppStatus.AR_MODE);
     }
   };
@@ -147,28 +153,29 @@ const App: React.FC = () => {
     setCurrentDetection(monster);
     setStatus(AppStatus.AR_MODE);
     
-    // Voice Integration
+    // Voice description protocol
     stopAudio();
-    const audioBuffer = await getLoreAudio(`Identified: ${monster.name}. ${monster.lore}`);
-    if (audioBuffer) {
-      if (!audioCtxRef.current) {
-        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    initAudio();
+    if (audioCtxRef.current) {
+      const audioBuffer = await getLoreAudio(`${monster.name}. ${monster.lore}`, audioCtxRef.current);
+      if (audioBuffer) {
+        const source = audioCtxRef.current.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioCtxRef.current.destination);
+        source.start();
+        audioSourceRef.current = source;
       }
-      const source = audioCtxRef.current.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(audioCtxRef.current.destination);
-      source.start();
-      audioSourceRef.current = source;
     }
   };
 
-  const clearTarget = () => {
+  const clearTarget = useCallback(() => {
     stopAudio();
     setCurrentDetection(null);
     setScanProgress(0);
-  };
+  }, [stopAudio]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    initAudio();
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
@@ -180,102 +187,112 @@ const App: React.FC = () => {
     }
   };
 
+  const enterAR = () => {
+    initAudio();
+    setStatus(AppStatus.AR_MODE);
+  };
+
   return (
-    <div className="relative min-h-screen w-screen bg-[#05070a] text-white overflow-x-hidden flex flex-col">
+    <div className="relative min-h-screen w-screen bg-[#05070a] text-white overflow-x-hidden flex flex-col font-inter">
       
-      {/* BACKGROUND CAMERA (Active during AR modes) */}
-      <div className={`fixed inset-0 z-0 transition-opacity duration-1000 ${(status === AppStatus.AR_MODE || currentDetection || status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+      {/* 1. PHOTONIC BACKGROUND (Active during AR states) */}
+      <div 
+        aria-hidden="true"
+        className={`fixed inset-0 z-0 transition-opacity duration-1000 ${(status === AppStatus.AR_MODE || currentDetection || status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+      >
         <video 
           ref={videoRef} 
           autoPlay 
           playsInline 
           muted 
-          className="h-full w-full object-cover grayscale-[10%] brightness-[0.7] contrast-[1.1]"
+          className="h-full w-full object-cover grayscale-[15%] brightness-[0.7] contrast-[1.1]"
         />
         <canvas ref={canvasRef} className="hidden" />
         <ScannerOverlay />
         
-        {/* Auto-Scan HUD indicator */}
+        {/* Auto-Scan Interface */}
         {status === AppStatus.AR_MODE && !currentDetection && !activeMonster && (
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-24 flex flex-col items-center gap-2 pointer-events-none">
-            <div className="w-48 h-1 bg-white/10 rounded-full overflow-hidden">
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-24 flex flex-col items-center gap-3 pointer-events-none">
+            <div className="w-56 h-1.5 bg-white/10 rounded-full overflow-hidden border border-white/5">
               <div 
-                className="h-full bg-cyan-400 shadow-[0_0_10px_#00f2ff] transition-all duration-100" 
+                className="h-full bg-cyan-400 shadow-[0_0_15px_#00f2ff] transition-all duration-100" 
                 style={{ width: `${scanProgress}%` }}
               ></div>
             </div>
-            <span className="text-[10px] font-orbitron tracking-[0.4em] text-cyan-400 animate-pulse uppercase">Fixating on Reality...</span>
+            <span className="text-[10px] font-orbitron tracking-[0.5em] text-cyan-400 animate-pulse uppercase">Fixating on Reality...</span>
           </div>
         )}
       </div>
 
-      {/* FOREGROUND INTERFACE */}
+      {/* 2. NEURAL INTERFACE LAYER */}
       <div className="relative z-10 flex-1 flex flex-col pointer-events-none">
         
-        {/* Header (Persistent) */}
+        {/* Persistent HUD Header */}
         <header className="p-6 md:p-8 flex justify-between items-start pointer-events-auto">
-          <div className="bg-black/40 backdrop-blur-md border border-cyan-500/30 p-4 rounded-xl flex flex-col">
+          <div className="bg-black/60 backdrop-blur-xl border border-cyan-500/30 p-4 rounded-xl flex flex-col shadow-2xl">
             <h1 className="text-2xl font-orbitron font-bold neon-text-cyan tracking-widest leading-none">LEXICON <span className="text-magenta-500">2026</span></h1>
-            <p className="text-[9px] font-mono text-cyan-400/60 tracking-[0.2em] mt-1 uppercase">Neural Link Established</p>
+            <p className="text-[9px] font-mono text-cyan-400/60 tracking-[0.2em] mt-1.5 uppercase">Neural Link Established</p>
           </div>
           
           {(status === AppStatus.AR_MODE || currentDetection) && (
             <button 
               onClick={() => { setStatus(AppStatus.IDLE); clearTarget(); }}
-              className="bg-red-900/40 backdrop-blur-xl border border-red-500/30 px-6 py-3 rounded-xl hover:bg-red-600/30 transition-all font-orbitron text-xs tracking-widest text-white uppercase"
+              aria-label="Exit Optical Interface"
+              className="bg-red-900/50 backdrop-blur-2xl border border-red-500/40 px-6 py-3 rounded-xl hover:bg-red-600/40 transition-all font-orbitron text-[10px] tracking-widest text-white uppercase shadow-lg focus:ring-2 focus:ring-red-400 outline-none"
             >
               Exit Optics
             </button>
           )}
         </header>
 
-        {/* HOME DASHBOARD (Visible when idle) */}
+        {/* HOME DASHBOARD */}
         {status === AppStatus.IDLE && !currentDetection && !activeMonster && (
-          <main className="flex-1 flex flex-col items-center justify-center p-6 pointer-events-auto animate-in fade-in duration-700">
+          <main className="flex-1 flex flex-col items-center justify-center p-6 pointer-events-auto animate-in fade-in duration-1000">
             <div className="max-w-6xl w-full flex flex-col items-center gap-16">
               
-              {/* Central Scan Control */}
+              {/* Primary Engagement Vector */}
               <div className="relative group">
                 <button 
-                  onClick={() => setStatus(AppStatus.AR_MODE)}
-                  className="relative z-20 w-64 h-64 rounded-full bg-black/40 backdrop-blur-md border-4 border-cyan-500/20 flex flex-col items-center justify-center gap-6 hover:border-cyan-400 hover:scale-105 transition-all group active:scale-95 shadow-[0_0_50px_rgba(0,242,255,0.1)] overflow-hidden"
+                  onClick={enterAR}
+                  aria-label="Enter Augmented Reality Scanning Mode"
+                  className="relative z-20 w-64 h-64 rounded-full bg-black/60 backdrop-blur-2xl border-4 border-cyan-500/20 flex flex-col items-center justify-center gap-6 hover:border-cyan-400 hover:scale-105 transition-all group active:scale-95 shadow-[0_0_80px_rgba(0,242,255,0.15)] overflow-hidden focus:ring-4 focus:ring-cyan-400 outline-none"
                 >
                   <div className="absolute inset-0 bg-cyan-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
                   <svg xmlns="http://www.w3.org/2000/svg" className="w-20 h-20 text-cyan-400 group-hover:neon-text-cyan transition-all" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                   </svg>
-                  <span className="font-orbitron font-bold text-cyan-400 tracking-[0.3em] text-sm uppercase">Enter AR Mode</span>
+                  <span className="font-orbitron font-bold text-cyan-400 tracking-[0.4em] text-xs uppercase">Initialize Optics</span>
                 </button>
-                <div className="absolute -inset-4 rounded-full border border-cyan-500/10 animate-[pulse_4s_ease-in-out_infinite] pointer-events-none"></div>
-                <div className="absolute -inset-10 rounded-full border border-magenta-500/5 animate-[pulse_3s_ease-in-out_infinite_reverse] pointer-events-none"></div>
+                <div className="absolute -inset-6 rounded-full border border-cyan-500/10 animate-[pulse_4s_ease-in-out_infinite] pointer-events-none"></div>
+                <div className="absolute -inset-12 rounded-full border border-magenta-500/5 animate-[pulse_3s_ease-in-out_infinite_reverse] pointer-events-none"></div>
               </div>
 
-              {/* Upload Alternate */}
-              <label className="cursor-pointer flex items-center gap-3 text-cyan-500/40 hover:text-cyan-400 transition-colors font-orbitron text-[10px] tracking-[0.5em] uppercase">
+              {/* Secondary Input */}
+              <label className="cursor-pointer flex items-center gap-3 text-cyan-500/50 hover:text-cyan-400 transition-all font-orbitron text-[10px] tracking-[0.5em] uppercase hover:tracking-[0.6em] focus-within:ring-2 focus-within:ring-cyan-500 rounded p-1">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                Manual Feed Upload
+                Neural Feed Upload
                 <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
               </label>
 
-              {/* Gallery Section */}
-              <section className="w-full">
-                <div className="flex items-center justify-between mb-8 border-b border-white/5 pb-4">
-                  <h2 className="text-xl font-orbitron font-bold neon-text-cyan flex items-center gap-4">
-                    <span className="w-2 h-2 bg-cyan-400 rounded-full shadow-[0_0_8px_#00f2ff]"></span>
-                    COLLECTED NEURAL LOGS
+              {/* Catalog Section */}
+              <section className="w-full" aria-labelledby="gallery-title">
+                <div className="flex items-center justify-between mb-8 border-b border-white/10 pb-4">
+                  <h2 id="gallery-title" className="text-xl font-orbitron font-bold neon-text-cyan flex items-center gap-4">
+                    <span className="w-2.5 h-2.5 bg-cyan-400 rounded-full shadow-[0_0_10px_#00f2ff]"></span>
+                    NEURAL ARCHIVE
                   </h2>
-                  <span className="font-mono text-cyan-500/50 text-xs tracking-widest uppercase">ID_BUFFER: {collection.length}</span>
+                  <span className="font-mono text-cyan-500/50 text-[10px] tracking-widest uppercase">SYMBOLS: {collection.length}</span>
                 </div>
 
                 {collection.length === 0 ? (
-                  <div className="py-24 flex flex-col items-center justify-center border border-dashed border-white/5 rounded-3xl opacity-30">
-                    <p className="font-orbitron text-[10px] tracking-[0.5em] uppercase">Lexicon database empty</p>
+                  <div className="py-28 flex flex-col items-center justify-center border border-dashed border-white/10 rounded-3xl opacity-30 bg-white/[0.02]">
+                    <p className="font-orbitron text-[10px] tracking-[0.6em] uppercase">Archive buffer empty</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
                     {collection.map(monster => (
-                      <MonsterCard key={monster.id} monster={monster} onClick={() => setActiveMonster(monster)} />
+                      <MonsterCard key={monster.id} monster={monster} onClick={() => { initAudio(); setActiveMonster(monster); }} />
                     ))}
                   </div>
                 )}
@@ -285,24 +302,28 @@ const App: React.FC = () => {
           </main>
         )}
 
-        {/* DETECTION POPOVER (Overlay for AR/Scanning) */}
+        {/* DETECTION POPOVER (Overlay for AR Mode) */}
         {currentDetection && (
-          <div className="fixed bottom-12 left-1/2 -translate-x-1/2 w-[90%] max-w-md pointer-events-auto animate-in slide-in-from-bottom-10 fade-in duration-500">
+          <div 
+            role="alert"
+            aria-live="polite"
+            className="fixed bottom-12 left-1/2 -translate-x-1/2 w-[92%] max-w-md pointer-events-auto animate-in slide-in-from-bottom-12 fade-in duration-700"
+          >
             <div 
               onClick={() => setActiveMonster(currentDetection)}
-              className="bg-black/70 backdrop-blur-2xl border-2 border-cyan-500/50 rounded-2xl p-4 shadow-[0_0_60px_rgba(0,242,255,0.3)] flex items-center gap-5 cursor-pointer hover:border-white transition-all group"
+              className="bg-black/70 backdrop-blur-2xl border-2 border-cyan-500/50 rounded-2xl p-5 shadow-[0_0_80px_rgba(0,242,255,0.4)] flex items-center gap-5 cursor-pointer hover:border-white hover:scale-[1.02] transition-all group focus:ring-2 focus:ring-cyan-500 outline-none"
             >
-              <div className="w-24 h-24 rounded-xl overflow-hidden border border-white/20 shrink-0 relative">
-                <img src={currentDetection.imageUrl} className="w-full h-full object-cover brightness-110 group-hover:scale-110 transition-transform duration-700" alt="" />
-                <div className="absolute inset-0 bg-cyan-500/10 mix-blend-overlay"></div>
+              <div className="w-24 h-24 rounded-xl overflow-hidden border border-white/20 shrink-0 relative shadow-inner">
+                <img src={currentDetection.imageUrl} className="w-full h-full object-cover brightness-110 group-hover:scale-110 transition-transform duration-1000" alt="" />
+                <div className="absolute inset-0 bg-cyan-500/20 mix-blend-overlay"></div>
               </div>
               <div className="flex-1">
                 <div className="flex justify-between items-start">
                   <div>
-                    <h3 className="font-orbitron font-bold text-xl neon-text-cyan leading-tight tracking-tighter uppercase">{currentDetection.name}</h3>
-                    <div className="flex gap-1.5 mt-1.5">
+                    <h3 className="font-orbitron font-bold text-2xl neon-text-cyan leading-none tracking-tighter uppercase">{currentDetection.name}</h3>
+                    <div className="flex gap-1.5 mt-2.5">
                       {currentDetection.types.map(t => (
-                        <span key={t} className="text-[9px] px-2 py-0.5 bg-cyan-900/40 border border-cyan-500/20 text-cyan-300 font-bold uppercase tracking-widest rounded-md">
+                        <span key={t} className="text-[10px] px-2.5 py-0.5 bg-cyan-900/50 border border-cyan-500/30 text-cyan-200 font-bold uppercase tracking-widest rounded shadow-sm">
                           {t}
                         </span>
                       ))}
@@ -310,64 +331,66 @@ const App: React.FC = () => {
                   </div>
                   <button 
                     onClick={(e) => { e.stopPropagation(); clearTarget(); }}
+                    aria-label="Clear Target Detection"
                     className="p-2 -mt-2 -mr-2 text-white/30 hover:text-white hover:bg-white/10 rounded-full transition-all"
                   >
                     <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                   </button>
                 </div>
-                <p className="text-[10px] text-white/40 mt-3 font-mono tracking-tighter line-clamp-2 italic leading-relaxed">
-                  Source Identified: {currentDetection.originalObject}
+                <p className="text-[11px] text-white/50 mt-4 font-mono tracking-tight line-clamp-2 italic leading-relaxed border-l border-white/10 pl-2">
+                  Object: {currentDetection.originalObject}
                 </p>
-                <div className="mt-2 flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse"></div>
-                  <span className="text-[8px] font-orbitron tracking-[0.2em] text-cyan-500/60 uppercase">Tap for full neural log</span>
+                <div className="mt-3 flex items-center gap-2">
+                  <div className="w-2 h-2 bg-cyan-400 rounded-full animate-ping"></div>
+                  <span className="text-[9px] font-orbitron tracking-[0.3em] text-cyan-500 uppercase">Tap for Neural Depth</span>
                 </div>
               </div>
             </div>
             
             <button 
               onClick={clearTarget}
-              className="mt-4 mx-auto block px-6 py-2 bg-black/40 border border-white/5 rounded-full font-orbitron text-[9px] tracking-[0.3em] uppercase hover:bg-magenta-500/20 hover:border-magenta-500 transition-all text-white/50 hover:text-white"
+              className="mt-6 mx-auto block px-8 py-2.5 bg-black/50 border border-white/10 rounded-full font-orbitron text-[10px] tracking-[0.4em] uppercase hover:bg-magenta-500/30 hover:border-magenta-500 transition-all text-white/40 hover:text-white shadow-xl"
             >
-              Target Lost / Clear Optics
+              Clear Optics
             </button>
           </div>
         )}
       </div>
 
-      {/* PROCESSING HUD OVERLAYS */}
+      {/* 3. SYNTHESIS HUD OVERLAYS */}
       {(status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL) && (
-        <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center">
+        <div 
+          role="status"
+          aria-busy="true"
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center"
+        >
           <div className="relative w-64 h-64 flex items-center justify-center">
-            <div className="absolute inset-0 border-2 border-cyan-500/20 rounded-full animate-[spin_4s_linear_infinite]"></div>
-            <div className="absolute inset-4 border border-dashed border-magenta-500/40 rounded-full animate-[spin_8s_linear_infinite_reverse]"></div>
-            <div className="absolute inset-10 border border-white/5 rounded-full animate-pulse"></div>
+            <div className="absolute inset-0 border-2 border-cyan-500/20 rounded-full animate-[spin_6s_linear_infinite]"></div>
+            <div className="absolute inset-6 border border-dashed border-magenta-500/40 rounded-full animate-[spin_10s_linear_infinite_reverse]"></div>
+            <div className="absolute inset-12 border border-white/5 rounded-full animate-pulse"></div>
             
             <div className="flex flex-col items-center gap-3">
-              <span className="font-orbitron text-xl font-black neon-text-cyan tracking-widest animate-pulse">
+              <span className="font-orbitron text-2xl font-black neon-text-cyan tracking-[0.2em] animate-pulse">
                 {status === AppStatus.EVOLVING ? 'ANALYZING' : 'SYNTHESIZING'}
               </span>
-              <div className="flex gap-1.5">
+              <div className="flex gap-2">
                 {[0,1,2].map(i => (
-                  <div key={i} className="w-1.5 h-1.5 bg-cyan-500 animate-bounce" style={{ animationDelay: `${i*0.2}s` }}></div>
+                  <div key={i} className="w-2 h-2 bg-cyan-400 rounded-full animate-bounce" style={{ animationDelay: `${i*0.2}s` }}></div>
                 ))}
               </div>
             </div>
           </div>
-          <p className="mt-8 text-xs font-mono tracking-[0.5em] uppercase text-white/40 max-w-xs leading-relaxed">
+          <p className="mt-10 text-[11px] font-mono tracking-[0.5em] uppercase text-white/40 max-w-xs leading-relaxed">
             Constructing digital biological architecture from target photonic data...
           </p>
         </div>
       )}
 
-      {/* FULL CARD MODAL (Opened from popover or gallery) */}
+      {/* 4. MODALS */}
       {activeMonster && (
         <MonsterModal 
           monster={activeMonster} 
-          onClose={() => {
-            setActiveMonster(null);
-            // We don't change status, so if it was AR it stays AR
-          }} 
+          onClose={() => setActiveMonster(null)} 
         />
       )}
     </div>
