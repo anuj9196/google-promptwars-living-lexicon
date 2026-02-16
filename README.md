@@ -3,8 +3,8 @@
 > **AI-powered reality scanner** — Point your camera at any real-world object and watch it evolve into a digital creature via Google Vertex AI.
 
 [![Cloud Run](https://img.shields.io/badge/Deployed%20on-Cloud%20Run-4285F4?logo=google-cloud&logoColor=white)](https://cloud.google.com/run)
-[![Cloud Build](https://img.shields.io/badge/CI%2FCD-Cloud%20Build-4285F4?logo=google-cloud)](cloudbuild.yaml)
-[![Tests](https://img.shields.io/badge/Tests-35%2B%20Specs-brightgreen?logo=vitest)](vite.config.ts)
+[![GitHub Actions](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF?logo=github-actions&logoColor=white)](.github/workflows/deploy.yml)
+[![Tests](https://img.shields.io/badge/Tests-60%20Specs-brightgreen?logo=vitest)](vite.config.ts)
 [![Coverage](https://img.shields.io/badge/Coverage-85%25%2B-brightgreen)](coverage/)
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
@@ -38,42 +38,50 @@
 │  │ Imagen 3 │ │ Sessions  │ │ Signed URLs  │ │Structured │ │
 │  │ TTS      │ │ Analytics │ │ KMS Encrypt  │ │Audit Trail│ │
 │  └──────────┘ └───────────┘ └──────────────┘ └───────────┘ │
+│  ┌──────────┐ ┌───────────┐ ┌──────────────┐ ┌───────────┐ │
+│  │Cloud Run │ │ Artifact  │ │   Secret     │ │ Firebase  │ │
+│  │Serverless│ │ Registry  │ │  Manager     │ │ Analytics │ │
+│  │Container │ │ Docker    │ │  Secrets     │ │ Events    │ │
+│  └──────────┘ └───────────┘ └──────────────┘ └───────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Google Cloud Services Integration
+## Google Cloud Services Integration (13 Services)
 
-| Service | Usage | File |
-|---------|-------|------|
-| **Vertex AI (Gemini 2.0 Flash)** | Object analysis, lore generation, type classification | [`services/vertexAIService.js`](services/vertexAIService.js) |
-| **Vertex AI (Imagen 3.0)** | Monster visual generation from text prompts | [`services/vertexAIService.js`](services/vertexAIService.js) |
-| **Vertex AI (Gemini TTS)** | Text-to-speech narration of monster lore | [`services/vertexAIService.js`](services/vertexAIService.js) |
-| **Cloud Firestore** | Persistent NoSQL storage for sessions, monsters, analytics | [`services/firestoreService.js`](services/firestoreService.js) |
-| **Cloud Storage (GCS)** | Raw scan staging + processed monster image hosting | [`services/storageService.js`](services/storageService.js) |
-| **Cloud Logging** | Structured JSON logging with severity levels | [`services/loggingService.js`](services/loggingService.js) |
-| **Cloud Run** | Containerized serverless deployment | [`Dockerfile`](Dockerfile) |
-| **Cloud Build** | CI/CD pipeline (test → build → deploy) | [`cloudbuild.yaml`](cloudbuild.yaml) |
-| **Firebase Analytics** | Client-side event tracking (scans, views, errors) | [`index.html`](index.html) |
-| **reCAPTCHA v3** | Bot protection on scan endpoint | [`middleware/recaptcha.js`](middleware/recaptcha.js) |
+| # | Service | Usage | File |
+|---|---------|-------|------|
+| 1 | **Vertex AI (Gemini 2.0 Flash)** | Object analysis, lore generation, structured JSON output with schema enforcement | [`services/vertexAIService.js`](services/vertexAIService.js) |
+| 2 | **Vertex AI (Imagen 3.0)** | Monster visual generation — hyper-realistic 3D renders from text prompts | [`services/vertexAIService.js`](services/vertexAIService.js) |
+| 3 | **Vertex AI (Gemini 2.5 Flash TTS)** | Text-to-speech narration of monster lore with Kore voice | [`services/vertexAIService.js`](services/vertexAIService.js) |
+| 4 | **Cloud Firestore** | Persistent NoSQL storage — sessions, monster collections, global analytics counters | [`services/firestoreService.js`](services/firestoreService.js) |
+| 5 | **Cloud Storage (GCS)** | Dual-bucket architecture — raw scan staging + processed monster image hosting with signed URLs | [`services/storageService.js`](services/storageService.js) |
+| 6 | **Cloud Logging** | Structured JSON logging with severity levels, auto-ingested by Cloud Run | [`services/loggingService.js`](services/loggingService.js) |
+| 7 | **Cloud Run** | Containerized serverless deployment with auto-scaling (0–10 instances), health checks | [`Dockerfile`](Dockerfile) |
+| 8 | **Artifact Registry** | Docker container image storage for Cloud Run deployments | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) |
+| 9 | **Secret Manager** | Secure storage for sensitive credentials (reCAPTCHA secret key) | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) |
+| 10 | **IAM & Service Accounts** | Fine-grained access control — dedicated service account with least-privilege roles | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) |
+| 11 | **Firebase Analytics (GA4)** | Client-side event tracking — scan events, collection views, error rates | [`index.html`](index.html) |
+| 12 | **reCAPTCHA Enterprise (v3)** | Invisible bot protection with score-based filtering on scan endpoint | [`middleware/recaptcha.js`](middleware/recaptcha.js) |
+| 13 | **Cloud Build** | Alternative CI/CD pipeline (test → build → deploy) | [`cloudbuild.yaml`](cloudbuild.yaml) |
 
 ---
 
-## Security Hardening
+## Security Hardening (10-Point Checklist)
 
-| Layer | Implementation |
-|-------|----------------|
-| **Server-side API keys** | All AI inference via service account — zero client-side exposure |
-| **Helmet.js CSP** | Strict Content-Security-Policy with allowlisted domains |
-| **Rate limiting** | 10 req/min general API, 5 req/min scan endpoint |
-| **reCAPTCHA v3** | Score-based bot detection (threshold: 0.5) |
-| **Input validation** | Image size limit (10MB), type checking, session validation |
-| **Compression** | Brotli + gzip via `compression` middleware |
-| **Non-root Docker** | Container runs as `node` user, not root |
-| **Trust proxy** | Cloud Run X-Forwarded-For header support |
-| **Static cache** | Immutable 1-year cache for assets, no-cache for HTML |
-| **Dependency audit** | `npm audit` integrated in CI pipeline |
+| # | Layer | Implementation |
+|---|-------|----------------|
+| 1 | **Server-side API keys** | All AI inference via service account — zero client-side exposure |
+| 2 | **Helmet.js CSP** | Strict Content-Security-Policy with allowlisted domains |
+| 3 | **Rate limiting** | 10 req/min general API, 5 req/min scan endpoint |
+| 4 | **reCAPTCHA v3** | Score-based bot detection (threshold: 0.5) |
+| 5 | **Input validation** | Image size limit (10MB), type checking, session validation |
+| 6 | **Compression** | Brotli + gzip via `compression` middleware |
+| 7 | **Non-root Docker** | Container runs as `node` user, not root |
+| 8 | **Trust proxy** | Cloud Run X-Forwarded-For header support |
+| 9 | **Static cache** | Immutable 1-year cache for assets, no-cache for HTML |
+| 10 | **Secret Manager** | Sensitive keys stored in GCP Secret Manager, not env vars |
 
 ---
 
@@ -81,72 +89,32 @@
 
 | Cache Type | TTL | Purpose |
 |------------|-----|---------|
-| **Scan dedup** | 10 min | SHA hash of image → prevents duplicate AI calls |
-| **Collection** | 2 min | Session collection → reduces Firestore reads |
+| **Scan dedup** | 5 min | DJB2 hash of image samples → prevents duplicate AI calls |
+| **Collection** | 60s | Session collection → reduces Firestore reads |
 | **HTTP static** | 1 year | Immutable assets with fingerprinted filenames |
 
 Implementation: [`services/cacheService.js`](services/cacheService.js) — In-memory LRU via `node-cache` with stats endpoint at `/api/cache/stats`.
 
 ---
 
-## Project Structure
-
-```
-living-lexicon-2026/
-├── server.js                    # Express server with security + API routes
-├── App.tsx                      # React 19 SPA with AR camera + collection
-├── index.html                   # Entry with Analytics, reCAPTCHA, SEO meta
-├── types.ts                     # TypeScript interfaces
-├── services/
-│   ├── vertexAIService.js       # Gemini + Imagen + TTS via Vertex AI
-│   ├── firestoreService.js      # Firestore CRUD + analytics
-│   ├── storageService.js        # GCS upload + signed URLs
-│   ├── loggingService.js        # Cloud Logging integration
-│   ├── cacheService.js          # LRU scan dedup + collection cache
-│   └── geminiService.ts         # Client-side API client (no SDK)
-├── middleware/
-│   ├── recaptcha.js             # reCAPTCHA v3 verification
-│   └── rateLimiter.js           # Express rate limiting
-├── components/
-│   ├── MonsterCard.tsx          # Collection card UI
-│   ├── MonsterModal.tsx         # Full monster detail modal (ARIA dialog)
-│   ├── ScannerOverlay.tsx       # AR camera HUD overlay
-│   └── TutorialOverlay.tsx      # First-launch tutorial
-├── tests/
-│   └── integration/
-│       └── scanPipeline.test.js # Full API integration tests
-├── Dockerfile                   # Multi-stage, non-root, health check
-├── .dockerignore                # Lean production images
-├── cloudbuild.yaml              # Cloud Build CI/CD pipeline
-├── vite.config.ts               # Vitest + coverage configuration
-└── package.json                 # Dependencies + scripts
-```
-
----
-
 ## Testing
 
 ```bash
-# Run all tests
-npm test
-
-# Run with coverage report
-npm run test:coverage
-
-# Watch mode
-npm run test:watch
+npm test              # Run all 60 tests
+npm run test:coverage # Generate coverage report
+npm run test:watch    # Watch mode
 ```
 
-**Test Coverage: 35+ specs across 10 test files**
+**Test Coverage: 60 specs across 12 test files**
 
-| Category | Files | Test Count |
-|----------|-------|------------|
-| Backend Services | 4 | 20 |
-| Middleware | 2 | 5 |
-| React Components | 4 | 14 |
-| Integration | 1 | 4 |
+| Category | Files | Tests |
+|----------|-------|-------|
+| Backend Services | 5 | 31 |
+| Middleware | 2 | 6 |
+| React Components | 4 | 18 |
+| Integration | 1 | 5 |
 
-Coverage configuration generates `text`, `html`, `lcov`, and `json-summary` reports in `./coverage/`.
+Coverage: `v8` provider with `lcov`, `html`, and `json-summary` reporters. Thresholds: 70% lines/functions/branches.
 
 ---
 
@@ -160,36 +128,21 @@ Coverage configuration generates `text`, `html`, `lcov`, and `json-summary` repo
 ### Local Development
 
 ```bash
-# Install dependencies
 npm install
 
-# Set environment variables
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
-export GOOGLE_CLOUD_PROJECT="your-project-id"
-export GCS_RAW_BUCKET="your-raw-bucket"
-export GCS_ASSETS_BUCKET="your-assets-bucket"
+# Create .env (see .env.example)
+cp .env.example .env
 
-# Start dev server
 npm run dev
-```
-
-### Docker
-
-```bash
-# Build
-npm run docker:build
-
-# Run
-npm run docker:run
 ```
 
 ### Deploy to Cloud Run
 
-```bash
-# One-command deploy
-npm run deploy
+**Via GitHub Actions (recommended):**
+Push to `main` → automatic test → build → deploy pipeline.
 
-# Or via Cloud Build CI/CD
+**Via Cloud Build:**
+```bash
 gcloud builds submit --config cloudbuild.yaml
 ```
 
@@ -213,29 +166,21 @@ gcloud builds submit --config cloudbuild.yaml
 
 ## API Reference
 
-### `POST /api/scan`
-Full AI pipeline — uploads to GCS, analyzes with Gemini, generates with Imagen, saves to Firestore.
-
-### `GET /api/collection/:sessionId`
-Retrieve monster collection from Firestore with LRU cache.
-
-### `POST /api/tts`
-Text-to-speech via Vertex AI Gemini.
-
-### `GET /api/analytics`
-Global statistics from Firestore.
-
-### `GET /api/cache/stats`
-Cache hit/miss telemetry.
-
-### `GET /health`
-Cloud Run health check endpoint.
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/scan` | POST | Full AI pipeline — GCS upload → Gemini analysis → Imagen visual → Firestore save |
+| `/api/collection/:sessionId` | GET | Monster collection from Firestore with LRU cache |
+| `/api/tts` | POST | Text-to-speech via Gemini 2.5 Flash TTS |
+| `/api/analytics` | GET | Global statistics from Firestore |
+| `/api/cache/stats` | GET | Cache hit/miss telemetry |
+| `/health` | GET | Cloud Run health check |
 
 ---
 
 ## Performance
 
 - **Brotli + gzip compression** on all responses
+- **Lazy SDK initialization** — Cloud clients created on first use, not at import (faster cold starts)
 - **Immutable static assets** with 1-year cache headers
 - **In-memory LRU cache** for scan deduplication and collection reads
 - **Preconnect hints** to Google Fonts, GTM, and GCS
