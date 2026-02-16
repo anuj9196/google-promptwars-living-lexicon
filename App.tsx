@@ -8,6 +8,7 @@ import ScannerOverlay from './components/ScannerOverlay';
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [collection, setCollection] = useState<Monster[]>([]);
   const [activeMonster, setActiveMonster] = useState<Monster | null>(null);
   const [currentDetection, setCurrentDetection] = useState<Monster | null>(null);
@@ -19,7 +20,18 @@ const App: React.FC = () => {
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // Initialize Audio Context on user interaction to comply with browser policies
+  // Mandatory API key selection flow
+  const ensureApiKey = async () => {
+    if (typeof window !== 'undefined' && (window as any).aistudio) {
+      const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+      if (!hasKey) {
+        await (window as any).aistudio.openSelectKey();
+      }
+    }
+    return true;
+  };
+
+  // Initialize Audio Context on user interaction
   const initAudio = useCallback(() => {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -42,7 +54,7 @@ const App: React.FC = () => {
     localStorage.setItem('cyberdex_collection', JSON.stringify(collection));
   }, [collection]);
 
-  // Optical Interface: Camera management
+  // Optical Interface: Camera management with detailed error catching
   useEffect(() => {
     const isOpticalMode = status === AppStatus.AR_MODE || !!currentDetection || status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL;
     
@@ -55,8 +67,16 @@ const App: React.FC = () => {
             });
             streamRef.current = stream;
             if (videoRef.current) videoRef.current.srcObject = stream;
-          } catch (err) {
+            setErrorMessage(null); // Clear previous errors on success
+          } catch (err: any) {
             console.error("Optics Malfunction:", err);
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+              setErrorMessage("NEURAL LINK DENIED: Please enable camera access in browser settings to initialize optics.");
+            } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+              setErrorMessage("HARDWARE MALFUNCTION: No optical imaging devices detected on this unit.");
+            } else {
+              setErrorMessage("SYSTEM ERROR: Failed to initialize photonic sensor array.");
+            }
             setStatus(AppStatus.IDLE);
           }
         };
@@ -81,7 +101,7 @@ const App: React.FC = () => {
             captureFrame();
             return 0;
           }
-          return prev + 2.5; // ~2.4s for 100% at 60ms intervals
+          return prev + 2.5; 
         });
       }, 60);
     } else {
@@ -113,10 +133,10 @@ const App: React.FC = () => {
 
   const processImage = async (base64: string) => {
     try {
+      await ensureApiKey();
       setStatus(AppStatus.EVOLVING);
       const monsterData = await analyzeImage(base64);
       
-      // Check cache for identical findings
       const existing = collection.find(m => 
         m.name.toLowerCase() === monsterData.name?.toLowerCase() || 
         m.originalObject.toLowerCase() === monsterData.originalObject?.toLowerCase()
@@ -143,8 +163,9 @@ const App: React.FC = () => {
 
       setCollection(prev => [fullMonster, ...prev]);
       displayDetection(fullMonster);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Neural Synthesis Failure:", err);
+      setErrorMessage(`SYNTHESIS ERROR: ${err.message || 'Signal lost'}`);
       setStatus(AppStatus.AR_MODE);
     }
   };
@@ -153,7 +174,6 @@ const App: React.FC = () => {
     setCurrentDetection(monster);
     setStatus(AppStatus.AR_MODE);
     
-    // Voice description protocol
     stopAudio();
     initAudio();
     if (audioCtxRef.current) {
@@ -174,12 +194,12 @@ const App: React.FC = () => {
     setScanProgress(0);
   }, [stopAudio]);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     initAudio();
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = () => {
+      reader.onload = async () => {
         const base64 = (reader.result as string).split(',')[1];
         processImage(base64);
       };
@@ -187,15 +207,45 @@ const App: React.FC = () => {
     }
   };
 
-  const enterAR = () => {
+  const enterAR = async () => {
+    setErrorMessage(null); // Clear errors when trying again
     initAudio();
+    await ensureApiKey();
     setStatus(AppStatus.AR_MODE);
   };
 
   return (
     <div className="relative min-h-screen w-screen bg-[#05070a] text-white overflow-x-hidden flex flex-col font-inter">
       
-      {/* 1. PHOTONIC BACKGROUND (Active during AR states) */}
+      {/* 0. GLOBAL ERROR HUD (Top Overlay) */}
+      {errorMessage && (
+        <div 
+          role="alert"
+          className="fixed top-24 left-1/2 -translate-x-1/2 z-[300] w-[90%] max-w-xl animate-in slide-in-from-top-4 duration-500"
+        >
+          <div className="bg-red-950/80 backdrop-blur-2xl border border-red-500/50 p-4 rounded-xl flex items-center justify-between shadow-[0_0_40px_rgba(239,68,68,0.3)]">
+            <div className="flex items-center gap-4">
+              <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center shrink-0">
+                <svg className="w-6 h-6 text-red-500 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <p className="font-orbitron text-[10px] sm:text-xs tracking-widest text-red-100 uppercase leading-relaxed">
+                {errorMessage}
+              </p>
+            </div>
+            <button 
+              onClick={() => setErrorMessage(null)}
+              className="ml-4 p-2 text-red-400 hover:text-white transition-colors"
+              aria-label="Dismiss Alert"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 1. PHOTONIC BACKGROUND */}
       <div 
         aria-hidden="true"
         className={`fixed inset-0 z-0 transition-opacity duration-1000 ${(status === AppStatus.AR_MODE || currentDetection || status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
@@ -210,7 +260,6 @@ const App: React.FC = () => {
         <canvas ref={canvasRef} className="hidden" />
         <ScannerOverlay />
         
-        {/* Auto-Scan Interface */}
         {status === AppStatus.AR_MODE && !currentDetection && !activeMonster && (
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-24 flex flex-col items-center gap-3 pointer-events-none">
             <div className="w-56 h-1.5 bg-white/10 rounded-full overflow-hidden border border-white/5">
@@ -226,8 +275,6 @@ const App: React.FC = () => {
 
       {/* 2. NEURAL INTERFACE LAYER */}
       <div className="relative z-10 flex-1 flex flex-col pointer-events-none">
-        
-        {/* Persistent HUD Header */}
         <header className="p-6 md:p-8 flex justify-between items-start pointer-events-auto">
           <div className="bg-black/60 backdrop-blur-xl border border-cyan-500/30 p-4 rounded-xl flex flex-col shadow-2xl">
             <h1 className="text-2xl font-orbitron font-bold neon-text-cyan tracking-widest leading-none">LEXICON <span className="text-magenta-500">2026</span></h1>
@@ -238,24 +285,22 @@ const App: React.FC = () => {
             <button 
               onClick={() => { setStatus(AppStatus.IDLE); clearTarget(); }}
               aria-label="Exit Optical Interface"
-              className="bg-red-900/50 backdrop-blur-2xl border border-red-500/40 px-6 py-3 rounded-xl hover:bg-red-600/40 transition-all font-orbitron text-[10px] tracking-widest text-white uppercase shadow-lg focus:ring-2 focus:ring-red-400 outline-none"
+              className="bg-red-900/50 backdrop-blur-2xl border border-red-500/40 px-6 py-3 rounded-xl hover:bg-red-600/40 transition-all font-orbitron text-[10px] tracking-widest text-white uppercase shadow-lg outline-none"
             >
               Exit Optics
             </button>
           )}
         </header>
 
-        {/* HOME DASHBOARD */}
         {status === AppStatus.IDLE && !currentDetection && !activeMonster && (
           <main className="flex-1 flex flex-col items-center justify-center p-6 pointer-events-auto animate-in fade-in duration-1000">
             <div className="max-w-6xl w-full flex flex-col items-center gap-16">
               
-              {/* Primary Engagement Vector */}
               <div className="relative group">
                 <button 
                   onClick={enterAR}
                   aria-label="Enter Augmented Reality Scanning Mode"
-                  className="relative z-20 w-64 h-64 rounded-full bg-black/60 backdrop-blur-2xl border-4 border-cyan-500/20 flex flex-col items-center justify-center gap-6 hover:border-cyan-400 hover:scale-105 transition-all group active:scale-95 shadow-[0_0_80px_rgba(0,242,255,0.15)] overflow-hidden focus:ring-4 focus:ring-cyan-400 outline-none"
+                  className="relative z-20 w-64 h-64 rounded-full bg-black/60 backdrop-blur-2xl border-4 border-cyan-500/20 flex flex-col items-center justify-center gap-6 hover:border-cyan-400 hover:scale-105 transition-all group active:scale-95 shadow-[0_0_80px_rgba(0,242,255,0.15)] overflow-hidden outline-none"
                 >
                   <div className="absolute inset-0 bg-cyan-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
                   <svg xmlns="http://www.w3.org/2000/svg" className="w-20 h-20 text-cyan-400 group-hover:neon-text-cyan transition-all" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -268,14 +313,15 @@ const App: React.FC = () => {
                 <div className="absolute -inset-12 rounded-full border border-magenta-500/5 animate-[pulse_3s_ease-in-out_infinite_reverse] pointer-events-none"></div>
               </div>
 
-              {/* Secondary Input */}
-              <label className="cursor-pointer flex items-center gap-3 text-cyan-500/50 hover:text-cyan-400 transition-all font-orbitron text-[10px] tracking-[0.5em] uppercase hover:tracking-[0.6em] focus-within:ring-2 focus-within:ring-cyan-500 rounded p-1">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                Neural Feed Upload
-                <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
-              </label>
+              <div className="flex flex-col items-center gap-4">
+                <label className="cursor-pointer flex items-center gap-3 text-cyan-500/50 hover:text-cyan-400 transition-all font-orbitron text-[10px] tracking-[0.5em] uppercase hover:tracking-[0.6em] rounded p-1">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                  Neural Feed Upload
+                  <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
+                </label>
+                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-[8px] font-mono text-cyan-500/30 hover:text-cyan-500 transition-colors uppercase tracking-widest">Billing Documentation</a>
+              </div>
 
-              {/* Catalog Section */}
               <section className="w-full" aria-labelledby="gallery-title">
                 <div className="flex items-center justify-between mb-8 border-b border-white/10 pb-4">
                   <h2 id="gallery-title" className="text-xl font-orbitron font-bold neon-text-cyan flex items-center gap-4">
@@ -302,16 +348,11 @@ const App: React.FC = () => {
           </main>
         )}
 
-        {/* DETECTION POPOVER (Overlay for AR Mode) */}
         {currentDetection && (
-          <div 
-            role="alert"
-            aria-live="polite"
-            className="fixed bottom-12 left-1/2 -translate-x-1/2 w-[92%] max-w-md pointer-events-auto animate-in slide-in-from-bottom-12 fade-in duration-700"
-          >
+          <div className="fixed bottom-12 left-1/2 -translate-x-1/2 w-[92%] max-w-md pointer-events-auto animate-in slide-in-from-bottom-12 fade-in duration-700">
             <div 
               onClick={() => setActiveMonster(currentDetection)}
-              className="bg-black/70 backdrop-blur-2xl border-2 border-cyan-500/50 rounded-2xl p-5 shadow-[0_0_80px_rgba(0,242,255,0.4)] flex items-center gap-5 cursor-pointer hover:border-white hover:scale-[1.02] transition-all group focus:ring-2 focus:ring-cyan-500 outline-none"
+              className="bg-black/70 backdrop-blur-2xl border-2 border-cyan-500/50 rounded-2xl p-5 shadow-[0_0_80px_rgba(0,242,255,0.4)] flex items-center gap-5 cursor-pointer hover:border-white hover:scale-[1.02] transition-all group outline-none"
             >
               <div className="w-24 h-24 rounded-xl overflow-hidden border border-white/20 shrink-0 relative shadow-inner">
                 <img src={currentDetection.imageUrl} className="w-full h-full object-cover brightness-110 group-hover:scale-110 transition-transform duration-1000" alt="" />
@@ -340,44 +381,24 @@ const App: React.FC = () => {
                 <p className="text-[11px] text-white/50 mt-4 font-mono tracking-tight line-clamp-2 italic leading-relaxed border-l border-white/10 pl-2">
                   Object: {currentDetection.originalObject}
                 </p>
-                <div className="mt-3 flex items-center gap-2">
-                  <div className="w-2 h-2 bg-cyan-400 rounded-full animate-ping"></div>
-                  <span className="text-[9px] font-orbitron tracking-[0.3em] text-cyan-500 uppercase">Tap for Neural Depth</span>
-                </div>
               </div>
             </div>
-            
-            <button 
-              onClick={clearTarget}
-              className="mt-6 mx-auto block px-8 py-2.5 bg-black/50 border border-white/10 rounded-full font-orbitron text-[10px] tracking-[0.4em] uppercase hover:bg-magenta-500/30 hover:border-magenta-500 transition-all text-white/40 hover:text-white shadow-xl"
-            >
+            <button onClick={clearTarget} className="mt-6 mx-auto block px-8 py-2.5 bg-black/50 border border-white/10 rounded-full font-orbitron text-[10px] tracking-[0.4em] uppercase hover:bg-magenta-500/30 hover:border-magenta-500 transition-all text-white/40 hover:text-white shadow-xl">
               Clear Optics
             </button>
           </div>
         )}
       </div>
 
-      {/* 3. SYNTHESIS HUD OVERLAYS */}
       {(status === AppStatus.EVOLVING || status === AppStatus.GENERATING_VISUAL) && (
-        <div 
-          role="status"
-          aria-busy="true"
-          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center"
-        >
+        <div role="status" aria-busy="true" className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center">
           <div className="relative w-64 h-64 flex items-center justify-center">
             <div className="absolute inset-0 border-2 border-cyan-500/20 rounded-full animate-[spin_6s_linear_infinite]"></div>
             <div className="absolute inset-6 border border-dashed border-magenta-500/40 rounded-full animate-[spin_10s_linear_infinite_reverse]"></div>
-            <div className="absolute inset-12 border border-white/5 rounded-full animate-pulse"></div>
-            
             <div className="flex flex-col items-center gap-3">
               <span className="font-orbitron text-2xl font-black neon-text-cyan tracking-[0.2em] animate-pulse">
                 {status === AppStatus.EVOLVING ? 'ANALYZING' : 'SYNTHESIZING'}
               </span>
-              <div className="flex gap-2">
-                {[0,1,2].map(i => (
-                  <div key={i} className="w-2 h-2 bg-cyan-400 rounded-full animate-bounce" style={{ animationDelay: `${i*0.2}s` }}></div>
-                ))}
-              </div>
             </div>
           </div>
           <p className="mt-10 text-[11px] font-mono tracking-[0.5em] uppercase text-white/40 max-w-xs leading-relaxed">
@@ -386,12 +407,8 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* 4. MODALS */}
       {activeMonster && (
-        <MonsterModal 
-          monster={activeMonster} 
-          onClose={() => setActiveMonster(null)} 
-        />
+        <MonsterModal monster={activeMonster} onClose={() => setActiveMonster(null)} />
       )}
     </div>
   );

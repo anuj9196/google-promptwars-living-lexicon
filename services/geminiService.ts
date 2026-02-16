@@ -2,8 +2,6 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { Monster, Move } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
 const MONSTER_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -39,7 +37,13 @@ const MONSTER_SCHEMA = {
 async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
   try {
     return await fn();
-  } catch (err) {
+  } catch (err: any) {
+    // Fix: If the request fails with "Requested entity was not found.", trigger the key selection dialog.
+    if (err.message?.includes("Requested entity was not found.")) {
+      if (typeof window !== 'undefined' && (window as any).aistudio) {
+        await (window as any).aistudio.openSelectKey();
+      }
+    }
     if (retries <= 0) throw err;
     await new Promise(resolve => setTimeout(resolve, delay));
     return retry(fn, retries - 1, delay * 2);
@@ -48,6 +52,8 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promis
 
 export async function analyzeImage(base64Image: string): Promise<Partial<Monster>> {
   return retry(async () => {
+    // Fix: Instantiate GoogleGenAI right before the API call to ensure latest key usage.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: {
@@ -69,14 +75,23 @@ export async function analyzeImage(base64Image: string): Promise<Partial<Monster
 
 export async function generateMonsterVisual(monster: Partial<Monster>): Promise<string> {
   return retry(async () => {
+    // Fix: Instantiate GoogleGenAI right before the API call for dynamic key management.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const prompt = `A high-quality 3D creature design of a monster named '${monster.name}', evolved from a ${monster.originalObject}. Style: Futuristic, neon-lit, digital art, cinematic atmosphere, 8k resolution.`;
     
+    // Fix: Upgrade to gemini-3-pro-image-preview for high-quality "8k resolution" requests.
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
+      model: 'gemini-3-pro-image-preview',
       contents: { parts: [{ text: prompt }] },
-      config: { imageConfig: { aspectRatio: "1:1" } }
+      config: { 
+        imageConfig: { 
+          aspectRatio: "1:1",
+          imageSize: "1K" 
+        } 
+      }
     });
 
+    // Fix: Iterate through parts to find the image part as per guidelines for nano banana models.
     const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
     if (part?.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
     throw new Error("Visual generation failed - no image data returned.");
@@ -119,6 +134,8 @@ async function decodeAudioData(
 
 export async function getLoreAudio(text: string, audioCtx: AudioContext): Promise<AudioBuffer | null> {
   try {
+    // Fix: Instantiate GoogleGenAI right before the API call to ensure use of correct API key.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
       contents: [{ parts: [{ text: `Neural Scan Report: ${text}` }] }],
