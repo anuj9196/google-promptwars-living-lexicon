@@ -29,18 +29,24 @@ const ANALYTICS_DOC = 'analytics/globalStats';
  * @returns {Promise<void>}
  */
 async function ensureSession(sessionId) {
-    const sessionRef = getDb().collection(SESSIONS_COLLECTION).doc(sessionId);
-    const doc = await sessionRef.get();
-    if (!doc.exists) {
-        await sessionRef.set({
-            createdAt: FieldValue.serverTimestamp(),
-            lastActive: FieldValue.serverTimestamp(),
-            monsterCount: 0,
-            playerName: 'Anonymous',
-        });
-        cloudLogger.log('INFO', 'New session created in Firestore', { sessionId });
-    } else {
-        await sessionRef.update({ lastActive: FieldValue.serverTimestamp() });
+    try {
+        const sessionRef = getDb().collection(SESSIONS_COLLECTION).doc(sessionId);
+        const doc = await sessionRef.get();
+        if (!doc.exists) {
+            await sessionRef.set({
+                createdAt: FieldValue.serverTimestamp(),
+                lastActive: FieldValue.serverTimestamp(),
+                monsterCount: 0,
+                playerName: 'Anonymous',
+            });
+            cloudLogger.log('INFO', 'New session created in Firestore', { sessionId });
+        } else {
+            await sessionRef.update({ lastActive: FieldValue.serverTimestamp() });
+        }
+    } catch (err) {
+        cloudLogger.log('ERROR', 'Firestore ensureSession failed', { error: err.message, code: err.code });
+        // Re-throw if it's NOT_FOUND (5) - this means DB is missing
+        throw err;
     }
 }
 

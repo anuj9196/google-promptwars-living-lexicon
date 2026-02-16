@@ -85,36 +85,44 @@ async function analyzeImage(base64Image) {
     const model = getGenAI().models;
     const startTime = Date.now();
 
-    const response = await model.generateContent({
-      model: GEMINI_MODEL,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
-            {
-              text: 'Identify the object in this image and evolve it into a futuristic digital creature. Return structured JSON with name, originalObject, types (exactly 2), lore (2-3 sentences, Pokedex-style), and moves (3-4 moves with name, power 1-100, description).',
-            },
-          ],
+    try {
+      const response = await model.generateContent({
+        model: GEMINI_MODEL,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
+              {
+                text: 'Identify the object in this image and evolve it into a futuristic digital creature. Return structured JSON with name, originalObject, types (exactly 2), lore (2-3 sentences, Pokedex-style), and moves (3-4 moves with name, power 1-100, description).',
+              },
+            ],
+          },
+        ],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: MONSTER_SCHEMA,
         },
-      ],
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: MONSTER_SCHEMA,
-      },
-    });
+      });
 
-    const latencyMs = Date.now() - startTime;
-    cloudLogger.log('INFO', 'Gemini analysis complete', {
-      latencyMs,
-      model: GEMINI_MODEL,
-      project: PROJECT_ID,
-    });
+      const latencyMs = Date.now() - startTime;
+      cloudLogger.log('INFO', 'Gemini analysis complete', {
+        latencyMs,
+        model: GEMINI_MODEL,
+        project: PROJECT_ID,
+      });
 
-    const text =
-      response.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error('Gemini returned empty analysis.');
-    return { ...JSON.parse(text.trim()), _metrics: { analysisLatencyMs: latencyMs, model: GEMINI_MODEL } };
+      const text =
+        response.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) {
+        cloudLogger.log('ERROR', 'Gemini returned empty analysis', { response: JSON.stringify(response) });
+        throw new Error('Gemini returned empty analysis.');
+      }
+      return { ...JSON.parse(text.trim()), _metrics: { analysisLatencyMs: latencyMs, model: GEMINI_MODEL } };
+    } catch (err) {
+      cloudLogger.log('ERROR', 'Gemini analysis failed', { error: err.message, stack: err.stack, model: GEMINI_MODEL });
+      throw err;
+    }
   });
 }
 
