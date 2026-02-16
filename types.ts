@@ -18,7 +18,7 @@ export interface Monster {
 
 export enum AppStatus {
   IDLE = 'IDLE',
-  SCANNING = 'SCANNING',
+  AR_MODE = 'AR_MODE',
   EVOLVING = 'EVOLVING',
   GENERATING_VISUAL = 'GENERATING_VISUAL',
   DISPLAYING = 'DISPLAYING'
