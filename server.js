@@ -204,7 +204,7 @@ app.post('/api/scan', async (req, res) => {
       stack: err.stack,
       latencyMs: Date.now() - startTime,
     });
-    res.status(500).json({ error: 'Neural evolution failed', code: 'PIPELINE_ERROR' });
+    res.status(500).json({ error: `Neural evolution failed: ${err.message}`, code: 'PIPELINE_ERROR' });
   }
 });
 
