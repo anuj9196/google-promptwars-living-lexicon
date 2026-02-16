@@ -145,10 +145,15 @@ app.post('/api/scan', async (req, res) => {
       });
     }
 
-    // Stage 1: Upload raw scan to GCS
-    const scanId = `scan_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    const rawScanUrl = await storageService.uploadRawScan(image, scanId);
-    cloudLogger.log('INFO', 'Raw scan staged to GCS', { scanId, rawScanUrl });
+    // Stage 1: Upload raw scan to GCS (optional - don't fail pipeline)
+    let rawScanUrl = null;
+    try {
+      const scanId = `scan_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      rawScanUrl = await storageService.uploadRawScan(image, scanId);
+      cloudLogger.log('INFO', 'Raw scan staged to GCS', { scanId, rawScanUrl });
+    } catch (err) {
+      cloudLogger.log('WARNING', 'Raw scan upload failed (non-fatal)', { error: err.message });
+    }
 
     // Stage 2: Analyze with Gemini via Vertex AI
     const analysisResult = await vertexAI.analyzeImage(image);
@@ -156,12 +161,19 @@ app.post('/api/scan', async (req, res) => {
     // Stage 3: Generate visual with Imagen via Vertex AI
     const visualResult = await vertexAI.generateMonsterVisual(analysisResult);
 
-    // Stage 4: Upload monster image to GCS
+    // Stage 4: Upload monster image to GCS (optional - fallback to data URI)
     const monsterId = `m_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    const { publicUrl: imageUrl } = await storageService.uploadMonsterImage(
-      visualResult.raw,
-      monsterId
-    );
+    let imageUrl = visualResult.dataUri;
+
+    try {
+      const uploadResult = await storageService.uploadMonsterImage(
+        visualResult.raw,
+        monsterId
+      );
+      imageUrl = uploadResult.publicUrl;
+    } catch (err) {
+      cloudLogger.log('WARNING', 'Monster image upload failed (non-fatal) — using data URI fallback', { error: err.message });
+    }
 
     // Assemble full monster document
     const monster = {
@@ -204,7 +216,13 @@ app.post('/api/scan', async (req, res) => {
       stack: err.stack,
       latencyMs: Date.now() - startTime,
     });
-    res.status(500).json({ error: `Neural evolution failed: ${err.message}`, code: 'PIPELINE_ERROR' });
+    // Return full error details for debugging
+    res.status(500).json({
+      error: `Neural evolution failed: ${err.message}`,
+      details: JSON.stringify(err, Object.getOwnPropertyNames(err)),
+      code: 'PIPELINE_ERROR',
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
