@@ -4,6 +4,10 @@
  *
  * Log entries follow Google Cloud Logging structured format for
  * automatic ingestion by Cloud Logging / Stackdriver.
+ *
+ * Uses lazy initialization — the Logging client is only created on the
+ * first actual log call, not at import time. This prevents background
+ * credential discovery in test environments.
  */
 
 let Logging;
@@ -16,19 +20,25 @@ try {
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCP_PROJECT_ID || 'living-lexicon-prod';
 const LOG_NAME = 'living-lexicon-app';
 
-let logger = null;
-let log = null;
+let _log = null;
+let _initialized = false;
 
-// Initialize Cloud Logging if available
-if (Logging) {
-    try {
-        logger = new Logging({ projectId: PROJECT_ID });
-        log = logger.log(LOG_NAME);
-    } catch {
-        // Fallback to console if Cloud Logging init fails
-        logger = null;
-        log = null;
+/**
+ * Lazily initialize the Cloud Logging client (only on first use)
+ */
+function getLog() {
+    if (_initialized) return _log;
+    _initialized = true;
+
+    if (Logging && process.env.NODE_ENV !== 'test') {
+        try {
+            const logger = new Logging({ projectId: PROJECT_ID });
+            _log = logger.log(LOG_NAME);
+        } catch {
+            _log = null;
+        }
     }
+    return _log;
 }
 
 /**
@@ -55,6 +65,7 @@ const cloudLogger = {
             ...payload,
         };
 
+        const log = getLog();
         if (log) {
             // Write to Cloud Logging
             const metadata = {

@@ -11,15 +11,19 @@ const { cloudLogger } = require('./loggingService');
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCP_PROJECT_ID || 'living-lexicon-prod';
 const LOCATION = process.env.GCP_REGION || 'us-central1';
 
-// Vertex AI client — authenticated via service account (GOOGLE_APPLICATION_CREDENTIALS)
-const vertexAI = new VertexAI({ project: PROJECT_ID, location: LOCATION });
+// Lazy-initialized clients (created on first use, not at import time)
+let _vertexAI = null;
+let _genAI = null;
 
-// GenAI client for Imagen (uses API key or ADC)
-const genAI = new GoogleGenAI({
-  vertexai: true,
-  project: PROJECT_ID,
-  location: LOCATION,
-});
+function getVertexAI() {
+  if (!_vertexAI) _vertexAI = new VertexAI({ project: PROJECT_ID, location: LOCATION });
+  return _vertexAI;
+}
+
+function getGenAI() {
+  if (!_genAI) _genAI = new GoogleGenAI({ vertexai: true, project: PROJECT_ID, location: LOCATION });
+  return _genAI;
+}
 
 const GEMINI_MODEL = 'gemini-2.0-flash';
 const IMAGEN_MODEL = 'imagen-3.0-generate-001';
@@ -78,7 +82,7 @@ async function retry(fn, retries = 3, delay = 1000) {
  */
 async function analyzeImage(base64Image) {
   return retry(async () => {
-    const model = vertexAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const model = getVertexAI().getGenerativeModel({ model: GEMINI_MODEL });
     const startTime = Date.now();
 
     const response = await model.generateContent({
@@ -127,7 +131,7 @@ async function generateMonsterVisual(monsterData) {
       model: IMAGEN_MODEL,
     });
 
-    const response = await genAI.models.generateImages({
+    const response = await getGenAI().models.generateImages({
       model: IMAGEN_MODEL,
       prompt,
       config: {
@@ -163,7 +167,7 @@ async function generateTTS(text) {
   try {
     const startTime = Date.now();
 
-    const response = await genAI.models.generateContent({
+    const response = await getGenAI().models.generateContent({
       model: 'gemini-2.5-flash-preview-tts',
       contents: [{ parts: [{ text: `Neural Scan Report: ${text}` }] }],
       config: {

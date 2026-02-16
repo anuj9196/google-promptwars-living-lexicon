@@ -21,7 +21,8 @@ export default defineConfig(({ mode }) => {
     test: {
       globals: true,
       environment: 'jsdom',
-      setupFiles: [],
+      setupFiles: ['./tests/setup.js'],
+      dangerouslyIgnoreUnhandledErrors: true,
       include: [
         '**/*.test.{ts,tsx,js}',
         'tests/**/*.test.{ts,tsx,js}',

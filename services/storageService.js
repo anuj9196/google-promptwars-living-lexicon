@@ -14,7 +14,11 @@ const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCP_PROJECT_I
 const RAW_BUCKET = process.env.GCS_RAW_BUCKET || `${PROJECT_ID}-lexicon-raw-ingest`;
 const ASSETS_BUCKET = process.env.GCS_ASSETS_BUCKET || `${PROJECT_ID}-lexicon-assets`;
 
-const storage = new Storage({ projectId: PROJECT_ID });
+let _storage = null;
+function getStorage() {
+    if (!_storage) _storage = new Storage({ projectId: PROJECT_ID });
+    return _storage;
+}
 
 /**
  * Upload a base64-encoded image to a GCS bucket
@@ -26,7 +30,7 @@ const storage = new Storage({ projectId: PROJECT_ID });
  */
 async function uploadBase64(bucketName, objectName, base64Data, contentType = 'image/jpeg') {
     const buffer = Buffer.from(base64Data, 'base64');
-    const bucket = storage.bucket(bucketName);
+    const bucket = getStorage().bucket(bucketName);
     const file = bucket.file(objectName);
 
     await file.save(buffer, {
@@ -68,7 +72,7 @@ async function uploadMonsterImage(base64Image, monsterId) {
     const gcsUri = await uploadBase64(ASSETS_BUCKET, objectName, base64Image);
 
     // Generate signed URL valid for 7 days
-    const [signedUrl] = await storage
+    const [signedUrl] = await getStorage()
         .bucket(ASSETS_BUCKET)
         .file(objectName)
         .getSignedUrl({
@@ -92,7 +96,7 @@ async function uploadMonsterImage(base64Image, monsterId) {
  * @returns {Promise<string>} Signed URL
  */
 async function getSignedUrl(bucketName, objectName, expiresInMs = 7 * 24 * 60 * 60 * 1000) {
-    const [url] = await storage
+    const [url] = await getStorage()
         .bucket(bucketName)
         .file(objectName)
         .getSignedUrl({
@@ -107,5 +111,5 @@ module.exports = {
     uploadMonsterImage,
     getSignedUrl,
     // Exported for testing
-    _internals: { storage, RAW_BUCKET, ASSETS_BUCKET, uploadBase64 },
+    _internals: { getStorage, RAW_BUCKET, ASSETS_BUCKET, uploadBase64 },
 };

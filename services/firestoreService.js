@@ -13,7 +13,11 @@ const { cloudLogger } = require('./loggingService');
 
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCP_PROJECT_ID || 'living-lexicon-prod';
 
-const db = new Firestore({ projectId: PROJECT_ID });
+let _db = null;
+function getDb() {
+    if (!_db) _db = new Firestore({ projectId: PROJECT_ID });
+    return _db;
+}
 
 const SESSIONS_COLLECTION = 'sessions';
 const MONSTERS_SUBCOLLECTION = 'monsters';
@@ -25,7 +29,7 @@ const ANALYTICS_DOC = 'analytics/globalStats';
  * @returns {Promise<void>}
  */
 async function ensureSession(sessionId) {
-    const sessionRef = db.collection(SESSIONS_COLLECTION).doc(sessionId);
+    const sessionRef = getDb().collection(SESSIONS_COLLECTION).doc(sessionId);
     const doc = await sessionRef.get();
     if (!doc.exists) {
         await sessionRef.set({
@@ -47,7 +51,7 @@ async function ensureSession(sessionId) {
 async function saveMonster(sessionId, monster) {
     await ensureSession(sessionId);
 
-    const monsterRef = db
+    const monsterRef = getDb()
         .collection(SESSIONS_COLLECTION)
         .doc(sessionId)
         .collection(MONSTERS_SUBCOLLECTION)
@@ -59,7 +63,7 @@ async function saveMonster(sessionId, monster) {
     });
 
     // Update global analytics atomically
-    const statsRef = db.doc(ANALYTICS_DOC);
+    const statsRef = getDb().doc(ANALYTICS_DOC);
     await statsRef.set(
         {
             totalMonsters: FieldValue.increment(1),
@@ -84,7 +88,7 @@ async function saveMonster(sessionId, monster) {
  * @returns {Promise<Object[]>} Array of monster objects
  */
 async function getCollection(sessionId) {
-    const snapshot = await db
+    const snapshot = await getDb()
         .collection(SESSIONS_COLLECTION)
         .doc(sessionId)
         .collection(MONSTERS_SUBCOLLECTION)
@@ -111,7 +115,7 @@ async function getCollection(sessionId) {
  * @returns {Promise<Object|null>} Monster object or null
  */
 async function getMonster(sessionId, monsterId) {
-    const doc = await db
+    const doc = await getDb()
         .collection(SESSIONS_COLLECTION)
         .doc(sessionId)
         .collection(MONSTERS_SUBCOLLECTION)
@@ -127,7 +131,7 @@ async function getMonster(sessionId, monsterId) {
  * @returns {Promise<Object>} Analytics data
  */
 async function getAnalytics() {
-    const doc = await db.doc(ANALYTICS_DOC).get();
+    const doc = await getDb().doc(ANALYTICS_DOC).get();
     return doc.exists ? doc.data() : { totalMonsters: 0, totalScans: 0, topObjects: {} };
 }
 
@@ -138,5 +142,5 @@ module.exports = {
     getMonster,
     getAnalytics,
     // Exported for testing
-    _internals: { db, SESSIONS_COLLECTION, MONSTERS_SUBCOLLECTION, ANALYTICS_DOC },
+    _internals: { getDb, SESSIONS_COLLECTION, MONSTERS_SUBCOLLECTION, ANALYTICS_DOC },
 };
